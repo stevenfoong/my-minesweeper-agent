@@ -6,7 +6,7 @@ import pyautogui
 import keyboard  # pip install keyboard
 from capture      import capture_board, capture_counter, save_screenshot
 from board_parser import parse_board, print_board, is_game_over, parse_mine_counter
-from solver       import solve
+from solver       import solve, UNKNOWN
 from controller   import reveal_cell, flag_cell, start_new_game
 
 # ── CONFIGURATION ─────────────────────────────────────────────────────────────
@@ -56,6 +56,30 @@ REGION, ROWS, COLS, COUNTER_REGION = load_local_config()
 LOOP_DELAY   = 0.4   # seconds between board scans
 DEBUG        = True  # print board state each loop
 AUTO_RESTART = True  # automatically start a new game after win or loss
+
+def _validate_counter(remaining_mines, board, rows, cols):
+    """
+    Return remaining_mines if it looks plausible, else None.
+    Prevents bad OCR reads from corrupting the solver.
+    """
+    if remaining_mines is None:
+        return None
+    if not isinstance(remaining_mines, int):
+        return None
+    # Must be non-negative
+    if remaining_mines < 0:
+        return None
+    # Must not exceed total cells
+    if remaining_mines > rows * cols:
+        return None
+    # Count unknowns on board — counter can't exceed unknowns
+    n_unknowns = sum(
+        1 for r in range(rows) for c in range(cols)
+        if board[r][c] == UNKNOWN
+    )
+    if remaining_mines > n_unknowns:
+        return None
+    return remaining_mines
 
 # ── STOP FLAG ─────────────────────────────────────────────────────────────────
 # Shared flag — set to True when Ctrl+S is pressed to stop the bot gracefully
@@ -151,7 +175,11 @@ def play_one_game():
             print(f"\n── Scan #{scan_count} ──")
             print_board(board)
             if remaining_mines is not None:
-                print(f"   💣 Mines remaining: {remaining_mines}")
+                validated_mines_debug = _validate_counter(remaining_mines, board, ROWS, COLS)
+                if validated_mines_debug is not None:
+                    print(f"   💣 Mines remaining: {validated_mines_debug}")
+                else:
+                    print(f"   ⚠️  Mine counter read {remaining_mines} but failed plausibility check — ignored")
             else:
                 print("   ⚠️  Mine counter parse failed — proceeding without counter info")
 
@@ -168,7 +196,8 @@ def play_one_game():
         )
 
         # 5. Run solver (pass remaining_mines for global constraint; None falls back gracefully)
-        safe_cells, mine_cells, ambiguous = solve(board, remaining_mines)
+        validated_mines = _validate_counter(remaining_mines, board, ROWS, COLS)
+        safe_cells, mine_cells, ambiguous = solve(board, validated_mines)
 
         # 6. Check win condition
         if unknowns_total == 0:
@@ -177,7 +206,7 @@ def play_one_game():
             return "win"
 
         # Win via counter: counter is 0 and no ambiguous cells remain after solving
-        if remaining_mines is not None and remaining_mines == 0 and not ambiguous:
+        if validated_mines is not None and validated_mines == 0 and not ambiguous:
             print("\n🎉 Mine counter reads 0 and no ambiguous cells — game won!")
             _print_game_stats()
             return "win"
