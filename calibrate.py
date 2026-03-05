@@ -2,6 +2,8 @@
 Run this first to find the exact screen region of your minesweeper board.
 Move your mouse to the TOP-LEFT corner of the board grid, press ENTER.
 Then move to the BOTTOM-RIGHT corner, press ENTER.
+Then move to the TOP-LEFT corner of the mine counter display, press ENTER.
+Then move to the BOTTOM-RIGHT corner of the mine counter display, press ENTER.
 """
 import json
 import os
@@ -44,10 +46,28 @@ def calibrate():
     rows = prompt_positive_int("Enter number of ROWS (e.g. 9, 16): ")
     cols = prompt_positive_int("Enter number of COLS (e.g. 9, 16, 30): ")
 
+    # Calibrate the mine counter display region
+    print("\nNow calibrate the mine counter (the red 7-segment LED display, top-left of the UI).")
+    input("Move mouse to TOP-LEFT corner of the mine counter display, then press ENTER...")
+    cx1, cy1 = pyautogui.position()
+    print(f"  Counter top-left: ({cx1}, {cy1})")
+
+    input("Move mouse to BOTTOM-RIGHT corner of the mine counter display, then press ENTER...")
+    cx2, cy2 = pyautogui.position()
+    print(f"  Counter bottom-right: ({cx2}, {cy2})")
+
+    counter_region = {
+        "top":    cy1,
+        "left":   cx1,
+        "width":  cx2 - cx1,
+        "height": cy2 - cy1,
+    }
+
     config = {
         "region": region,
         "rows": rows,
         "cols": cols,
+        "counter_region": counter_region,
     }
 
     config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), CONFIG_FILE)
@@ -55,9 +75,10 @@ def calibrate():
         json.dump(config, f, indent=4)
 
     print(f"\n✅ Config saved to {CONFIG_FILE}:")
-    print(f'   region: {region}')
-    print(f'   rows:   {rows}')
-    print(f'   cols:   {cols}')
+    print(f'   region:         {region}')
+    print(f'   rows:           {rows}')
+    print(f'   cols:           {cols}')
+    print(f'   counter_region: {counter_region}')
 
 if __name__ == "__main__":
     calibrate()

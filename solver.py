@@ -8,6 +8,10 @@ Phase 1: Basic rules
 Phase 2: Subset constraint
   - If constraint A is a strict subset of constraint B, the difference cells
     have (mines_B - mines_A) mines among them, enabling further deductions.
+
+Phase 3: Global mine-counter constraint
+  - If remaining_mines == 0 -> all unknown cells are safe (reveal them all)
+  - If remaining_mines == number of unknown cells -> all unknowns are mines
 """
 
 UNKNOWN = -1
@@ -23,11 +27,16 @@ def get_neighbors(r, c, rows, cols):
         and 0 <= c + dc < cols
     ]
 
-def build_constraints(board):
+def build_constraints(board, known_mines=None, known_safe=None):
     """
     Build a list of (unknown_neighbor_set, remaining_mine_count) constraints
-    from all numbered cells on the board.
+    from all numbered cells on the board, taking into account already-decided cells.
     """
+    if known_mines is None:
+        known_mines = set()
+    if known_safe is None:
+        known_safe = set()
+
     rows, cols = len(board), len(board[0])
     constraints = []
 
@@ -36,82 +45,104 @@ def build_constraints(board):
             val = board[r][c]
             if val <= 0:
                 continue
-            neighbors   = get_neighbors(r, c, rows, cols)
-            unknowns    = frozenset(n for n in neighbors if board[n[0]][n[1]] == UNKNOWN)
-            flagged_cnt = sum(1 for n in neighbors if board[n[0]][n[1]] == FLAGGED)
-            remaining   = val - flagged_cnt
+            neighbors = get_neighbors(r, c, rows, cols)
+
+            # Count board-flagged AND solver-identified mines
+            flagged_cnt     = sum(1 for n in neighbors if board[n[0]][n[1]] == FLAGGED)
+            solver_mine_cnt = sum(1 for n in neighbors if n in known_mines)
+            remaining = val - flagged_cnt - solver_mine_cnt
 
             if remaining < 0:
-                continue  # board parse error
+                continue  # board parse error / over-flagged
+
+            # Only include truly undecided unknown cells
+            unknowns = frozenset(
+                n for n in neighbors
+                if board[n[0]][n[1]] == UNKNOWN
+                and n not in known_mines
+                and n not in known_safe
+            )
+
             if unknowns:
                 constraints.append((unknowns, remaining))
 
     return constraints
 
-def solve(board):
+def solve(board, remaining_mines=None):
     """
     Returns:
       safe_cells  : set of (r,c) — guaranteed safe to click
       mine_cells  : set of (r,c) — guaranteed mines, flag them
       ambiguous   : list of (r,c) — cannot determine, ask user
+
+    remaining_mines: int or None — the mine counter read from the UI.
+      If 0, all unknowns are safe.
+      If equal to number of unknowns, all unknowns are mines.
     """
     rows, cols = len(board), len(board[0])
     safe_cells = set()
     mine_cells = set()
 
-    constraints = build_constraints(board)
-    changed = True
-
-    while changed:
-        changed = False
-        new_constraints = []
-
-        for cells, mine_count in constraints:
-            # Count known mines BEFORE removing them from the cell set
-            mine_count -= sum(1 for c in mine_cells if c in cells)
-            # Now remove already-decided cells from this constraint
-            cells = cells - mine_cells - safe_cells
-            # Recompute after removing known mines
-            clean_cells = frozenset(
-                c for c in cells if board[c[0]][c[1]] == UNKNOWN
-            )
-
-            # Basic rules
-            if mine_count == 0 and clean_cells:
-                safe_cells.update(clean_cells)
-                changed = True
-                continue
-            if mine_count == len(clean_cells) and clean_cells:
-                mine_cells.update(clean_cells)
-                changed = True
-                continue
-
-            new_constraints.append((clean_cells, mine_count))
-
-        # Subset rule: if A is subset of B, then B-A has (mines_B - mines_A) mines
-        for i, (cells_a, mines_a) in enumerate(new_constraints):
-            for j, (cells_b, mines_b) in enumerate(new_constraints):
-                if i == j or not cells_a or not cells_b:
-                    continue
-                if cells_a < cells_b:          # A is strict subset of B
-                    diff       = cells_b - cells_a
-                    diff_mines = mines_b - mines_a
-                    if diff_mines == 0:
-                        safe_cells.update(diff)
-                        changed = True
-                    elif diff_mines == len(diff):
-                        mine_cells.update(diff)
-                        changed = True
-
-        constraints = new_constraints
-
-    # Collect all unknown cells
+    # Collect all unknown cells upfront
     all_unknowns = {
         (r, c)
         for r in range(rows)
         for c in range(cols)
         if board[r][c] == UNKNOWN
     }
+
+    # Phase 3: Global mine-counter constraint
+    if remaining_mines is not None:
+        if remaining_mines == 0:
+            # No mines left among unknowns — all safe
+            safe_cells.update(all_unknowns)
+        elif remaining_mines == len(all_unknowns):
+            # All unknowns are mines
+            mine_cells.update(all_unknowns)
+
+    changed = True
+    while changed:
+        changed = False
+
+        # Rebuild constraints each iteration with latest known mines/safe cells
+        constraints = build_constraints(board, mine_cells, safe_cells)
+        new_constraints = []
+
+        for cells, mine_count in constraints:
+            # Basic rules
+            if mine_count == 0 and cells:
+                newly_safe = cells - safe_cells
+                if newly_safe:
+                    safe_cells.update(newly_safe)
+                    changed = True
+                continue
+            if mine_count == len(cells) and cells:
+                newly_mined = cells - mine_cells
+                if newly_mined:
+                    mine_cells.update(newly_mined)
+                    changed = True
+                continue
+
+            new_constraints.append((cells, mine_count))
+
+        # Subset rule: if A is strict subset of B, then B-A has (mines_B - mines_A) mines
+        for i, (cells_a, mines_a) in enumerate(new_constraints):
+            for j, (cells_b, mines_b) in enumerate(new_constraints):
+                if i == j or not cells_a or not cells_b:
+                    continue
+                if cells_a < cells_b:   # A is strict subset of B
+                    diff       = cells_b - cells_a
+                    diff_mines = mines_b - mines_a
+                    if diff_mines == 0:
+                        newly_safe = diff - safe_cells
+                        if newly_safe:
+                            safe_cells.update(newly_safe)
+                            changed = True
+                    elif diff_mines == len(diff):
+                        newly_mined = diff - mine_cells
+                        if newly_mined:
+                            mine_cells.update(newly_mined)
+                            changed = True
 
     decided   = safe_cells | mine_cells
     ambiguous = list(all_unknowns - decided)

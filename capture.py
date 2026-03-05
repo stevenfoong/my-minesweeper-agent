@@ -13,6 +13,17 @@ def capture_board(region: dict) -> np.ndarray:
         img = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
         return np.array(img)
 
+def capture_counter(counter_region: dict) -> np.ndarray:
+    """
+    Captures the mine counter display region from screen.
+    counter_region = {"top": y, "left": x, "width": w, "height": h}
+    Returns an RGB numpy array.
+    """
+    with mss.mss() as sct:
+        raw = sct.grab(counter_region)
+        img = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
+        return np.array(img)
+
 def save_screenshot(img: np.ndarray, path="debug_board.png"):
     """Save board screenshot for debugging."""
     from PIL import Image
