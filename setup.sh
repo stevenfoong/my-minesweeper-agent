@@ -1,5 +1,5 @@
 # 1. Install dependencies
-pip install mss pillow opencv-python pyautogui numpy
+pip install mss pillow opencv-python pyautogui numpy keyboard
 
 # 2. Run calibration to find your board region
 python calibrate.py
