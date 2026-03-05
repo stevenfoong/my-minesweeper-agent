@@ -1,3 +1,5 @@
+import json
+import os
 import time
 import threading
 import pyautogui
@@ -14,8 +16,28 @@ from controller   import reveal_cell, flag_cell, start_new_game
 #   Intermediate: 16x16, 40 mines
 #   Expert:       16x30, 99 mines
 
-REGION = {"top": 300, "left": 400, "width": 960, "height": 512}  # update via calibrate.py
-ROWS, COLS = 16, 30   # Expert mode
+_CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.local.json")
+
+def load_local_config():
+    """Load REGION, ROWS, COLS from config.local.json, falling back to hardcoded defaults."""
+    try:
+        with open(_CONFIG_FILE, encoding="utf-8") as f:
+            cfg = json.load(f)
+        region = cfg["region"]
+        rows   = int(cfg["rows"])
+        cols   = int(cfg["cols"])
+        if rows <= 0 or cols <= 0:
+            raise ValueError("rows and cols must be positive integers")
+        print("⚙️  Loaded config from config.local.json")
+        return region, rows, cols
+    except FileNotFoundError:
+        print("⚠️  config.local.json not found — using hardcoded defaults. Run calibrate.py first!")
+        return {"top": 300, "left": 400, "width": 960, "height": 512}, 16, 30
+    except (json.JSONDecodeError, KeyError, ValueError) as e:
+        print(f"⚠️  config.local.json is invalid ({e}) — using hardcoded defaults. Run calibrate.py first!")
+        return {"top": 300, "left": 400, "width": 960, "height": 512}, 16, 30
+
+REGION, ROWS, COLS = load_local_config()
 
 LOOP_DELAY   = 0.4   # seconds between board scans
 DEBUG        = True  # print board state each loop
