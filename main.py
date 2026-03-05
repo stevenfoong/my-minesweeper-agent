@@ -3,9 +3,9 @@ import threading
 import pyautogui
 import keyboard  # pip install keyboard
 from capture      import capture_board, save_screenshot
-from board_parser import parse_board, print_board
+from board_parser import parse_board, print_board, is_game_over
 from solver       import solve
-from controller   import reveal_cell, flag_cell
+from controller   import reveal_cell, flag_cell, start_new_game
 
 # ── CONFIGURATION ─────────────────────────────────────────────────────────────
 # Run calibrate.py first to get these values!
@@ -19,6 +19,7 @@ ROWS, COLS = 16, 30   # Expert mode
 
 LOOP_DELAY   = 0.4   # seconds between board scans
 DEBUG        = True  # print board state each loop
+AUTO_RESTART = True  # automatically start a new game after win or loss
 
 # ── STOP FLAG ─────────────────────────────────────────────────────────────────
 # Shared flag — set to True when Ctrl+S is pressed to stop the bot gracefully
@@ -83,11 +84,101 @@ def first_click(region, rows, cols):
     reveal_cell(rows // 2, cols // 2, region, rows, cols)
     time.sleep(0.8)
 
+def play_one_game():
+    """
+    Play a single game and return the outcome.
+    Returns: "win", "loss", or "stopped"
+    """
+    first_click(REGION, ROWS, COLS)
+
+    move_count  = 0
+    guess_count = 0
+
+    def _print_game_stats():
+        print(f"   Stats this game: {move_count} logical moves, {guess_count} guesses")
+
+    while not stop_flag.is_set():
+        # 1. Capture current board state
+        img   = capture_board(REGION)
+        board = parse_board(img, ROWS, COLS)
+
+        if DEBUG:
+            print(f"\n── Scan #{move_count + 1} ──")
+            print_board(board)
+
+        # 2. Check for game-over loss (exploded mine detected)
+        if is_game_over(board):
+            print("\n💥 Mine hit — game over! (loss)")
+            _print_game_stats()
+            return "loss"
+
+        # 3. Run solver
+        safe_cells, mine_cells, ambiguous = solve(board)
+
+        # 4. Check win condition
+        unknowns_total = sum(
+            1 for r in range(ROWS) for c in range(COLS)
+            if board[r][c] == -1
+        )
+        if unknowns_total == 0:
+            print("\n🎉 Board complete! (win)")
+            _print_game_stats()
+            return "win"
+
+        moved = False
+
+        # 5. Flag all confirmed mines
+        for (r, c) in mine_cells:
+            if stop_flag.is_set():
+                break
+            print(f"🚩 Flagging mine at row {r+1}, col {c+1}")
+            flag_cell(r, c, REGION, ROWS, COLS)
+            moved = True
+
+        # 6. Reveal all safe cells
+        for (r, c) in safe_cells:
+            if stop_flag.is_set():
+                break
+            print(f"✅ Revealing safe cell at row {r+1}, col {c+1}")
+            reveal_cell(r, c, REGION, ROWS, COLS)
+            moved = True
+            move_count += 1
+
+        # 7. If nothing to do, ask human
+        if not moved and not stop_flag.is_set():
+            if not ambiguous:
+                print("\n🎉 No more unknown cells — game likely finished!")
+                _print_game_stats()
+                return "win"
+
+            guess_count += 1
+            result, is_flag = ask_user(ambiguous, board)
+
+            if result == "quit":
+                print("👋 Bot stopped by user.")
+                return "stopped"
+            if result is None:
+                time.sleep(1)
+                continue
+
+            r, c = result
+            if is_flag:
+                print(f"🚩 User flagging ({r+1}, {c+1})")
+                flag_cell(r, c, REGION, ROWS, COLS)
+            else:
+                print(f"🖱️  User revealing ({r+1}, {c+1})")
+                reveal_cell(r, c, REGION, ROWS, COLS)
+
+        time.sleep(LOOP_DELAY)
+
+    return "stopped"
+
 def main():
     print("🎮 Minesweeper Bot for minesweeper.online")
     print("=" * 50)
     print(f"   Board: {ROWS}x{COLS}")
     print(f"   Region: {REGION}")
+    print(f"   Auto-restart: {'ON' if AUTO_RESTART else 'OFF'}")
     print("\n   ⌨️  Press Ctrl+S at any time to stop the bot.")
     print("\n⚡ Switch to your browser now! Starting in 3 seconds...")
 
@@ -102,81 +193,41 @@ def main():
         print("👋 Bot stopped before starting.")
         return
 
-    first_click(REGION, ROWS, COLS)
-
-    move_count  = 0
-    guess_count = 0
+    wins   = 0
+    losses = 0
+    game   = 0
 
     while not stop_flag.is_set():
-        # 1. Capture current board state
-        img   = capture_board(REGION)
-        board = parse_board(img, ROWS, COLS)
+        game += 1
+        print(f"\n{'='*50}")
+        print(f"🎯 Starting game #{game}  (wins: {wins}  losses: {losses})")
+        print(f"{'='*50}")
 
-        if DEBUG:
-            print(f"\n── Scan #{{move_count + 1}} ──")
-            print_board(board)
+        outcome = play_one_game()
 
-        # 2. Run solver
-        safe_cells, mine_cells, ambiguous = solve(board)
-
-        # 3. Check win condition
-        unknowns_total = sum(
-            1 for r in range(ROWS) for c in range(COLS)
-            if board[r][c] == -1
-        )
-        if unknowns_total == 0:
-            print("\n🎉 Board complete!")
+        if outcome == "win":
+            wins += 1
+        elif outcome == "loss":
+            losses += 1
+        elif outcome == "stopped":
             break
 
-        moved = False
+        if stop_flag.is_set():
+            break
 
-        # 4. Flag all confirmed mines
-        for (r, c) in mine_cells:
-            if stop_flag.is_set():
-                break
-            print(f"🚩 Flagging mine at row {{r+1}}, col {{c+1}}")
-            flag_cell(r, c, REGION, ROWS, COLS)
-            moved = True
-
-        # 5. Reveal all safe cells
-        for (r, c) in safe_cells:
-            if stop_flag.is_set():
-                break
-            print(f"✅ Revealing safe cell at row {{r+1}}, col {{c+1}}")
-            reveal_cell(r, c, REGION, ROWS, COLS)
-            moved = True
-            move_count += 1
-
-        # 6. If nothing to do, ask human
-        if not moved and not stop_flag.is_set():
-            if not ambiguous:
-                print("\n🎉 No more unknown cells — game likely finished!")
-                break
-
-            guess_count += 1
-            result, is_flag = ask_user(ambiguous, board)
-
-            if result == "quit":
-                print("👋 Bot stopped by user.")
-                break
-            if result is None:
-                time.sleep(1)
-                continue
-
-            r, c = result
-            if is_flag:
-                print(f"🚩 User flagging ({{r+1}}, {{c+1}})")
-                flag_cell(r, c, REGION, ROWS, COLS)
-            else:
-                print(f"🖱️  User revealing ({{r+1}}, {{c+1}})")
-                reveal_cell(r, c, REGION, ROWS, COLS)
-
-        time.sleep(LOOP_DELAY)
+        if AUTO_RESTART and outcome in ("win", "loss"):
+            print(f"\n🔄 Auto-restarting in 1 second…  (F2)")
+            time.sleep(1)
+            start_new_game()
+            time.sleep(1)   # wait for the board to reset
+        else:
+            # AUTO_RESTART is off — stop after the first game ends
+            break
 
     if stop_flag.is_set():
         print("\n🛑 Bot stopped via Ctrl+S.")
 
-    print(f"\n📊 Stats: {{move_count}} logical moves, {{guess_count}} user guesses")
+    print(f"\n📊 Overall stats: {game} game(s) played — {wins} win(s), {losses} loss(es)")
 
 if __name__ == "__main__":
     main()

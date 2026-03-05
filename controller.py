@@ -1,5 +1,6 @@
 import pyautogui
 import time
+from keyboard import press_and_release as _press_and_release
 
 pyautogui.PAUSE = 0.15  # small delay between actions
 
@@ -25,3 +26,8 @@ def chord_cell(r, c, region, rows, cols):
     non-flagged neighbors when correct number of flags are placed."""
     x, y = cell_center(r, c, region, rows, cols)
     pyautogui.doubleClick(x, y)
+
+def start_new_game():
+    """Press F2 to restart the current minesweeper game."""
+    _press_and_release("f2")
+    time.sleep(0.5)
