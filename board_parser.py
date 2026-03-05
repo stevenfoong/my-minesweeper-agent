@@ -47,14 +47,15 @@ def classify_cell(cell_bgr: np.ndarray) -> int:
     if red_pixels_all > total_pixels * 0.25:
         return EXPLODED
 
-    # --- Check for flag (look for red pixels in center region) ---
-    center = cell_bgr[h//4:3*h//4, w//4:3*w//4]
+    # --- Check for flag (look for red pixels in a broad center region) ---
+    # Use a generous region and loose thresholds to handle DPI scaling on Windows
+    flag_region = cell_bgr[h//5:4*h//5, w//5:4*w//5]
     red_pixels = np.sum(
-        (center[:,:,2] > 180) &   # high red
-        (center[:,:,1] < 80)  &   # low green
-        (center[:,:,0] < 80)       # low blue
+        (flag_region[:, :, 2] > 150) &   # high red channel (BGR)
+        (flag_region[:, :, 1] < 100) &   # low green channel
+        (flag_region[:, :, 0] < 100)     # low blue channel
     )
-    if red_pixels > 20:
+    if red_pixels > 8:
         return FLAGGED
 
     # --- Check overall brightness to distinguish revealed vs unrevealed ---

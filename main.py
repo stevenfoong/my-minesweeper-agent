@@ -168,8 +168,12 @@ def play_one_game():
         try:
             counter_img    = capture_counter(COUNTER_REGION)
             remaining_mines = parse_mine_counter(counter_img)
-        except Exception:
+            if remaining_mines is None and DEBUG:
+                save_screenshot(counter_img, "debug_counter.png")
+        except Exception as e:
             remaining_mines = None
+            if DEBUG:
+                print(f"   ⚠️  Counter capture error: {e}")
 
         if DEBUG:
             print(f"\n── Scan #{scan_count} ──")
@@ -211,7 +215,7 @@ def play_one_game():
             _print_game_stats()
             return "win"
 
-        revealed = False
+        acted = False
 
         # 7. Flag all confirmed mines
         for (r, c) in mine_cells:
@@ -219,6 +223,8 @@ def play_one_game():
                 break
             print(f"🚩 Flagging mine at row {r+1}, col {c+1}")
             flag_cell(r, c, REGION, ROWS, COLS)
+            acted = True
+            time.sleep(0.15)   # let the flag render before next scan
 
         # 8. Reveal all safe cells
         for (r, c) in safe_cells:
@@ -226,11 +232,11 @@ def play_one_game():
                 break
             print(f"✅ Revealing safe cell at row {r+1}, col {c+1}")
             reveal_cell(r, c, REGION, ROWS, COLS)
-            revealed = True
+            acted = True
             move_count += 1
 
         # 9. If nothing to do, ask human
-        if not revealed and not stop_flag.is_set():
+        if not acted and not stop_flag.is_set():
             if not ambiguous:
                 print("\n🎉 No more unknown cells — game likely finished!")
                 _print_game_stats()
