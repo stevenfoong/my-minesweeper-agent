@@ -92,12 +92,26 @@ def solve(board, remaining_mines=None):
     }
 
     # Phase 3: Global mine-counter constraint
-    if remaining_mines is not None:
-        if remaining_mines == 0:
-            # No mines left among unknowns — all safe
+    # Only trust the counter if it passes plausibility checks
+    if remaining_mines is not None and isinstance(remaining_mines, int):
+        total_cells = rows * cols
+        flagged_count = sum(
+            1 for r in range(rows) for c in range(cols)
+            if board[r][c] == FLAGGED
+        )
+        n_unknowns = len(all_unknowns)
+
+        # Basic sanity: counter must be non-negative and not exceed board size
+        counter_plausible = 0 <= remaining_mines <= total_cells
+
+        # For "remaining_mines == 0 → all safe" rule:
+        # Only trust it if at least one flag has already been placed on the board.
+        # This prevents false positives on early scans when counter OCR is unreliable.
+        if counter_plausible and remaining_mines == 0 and flagged_count > 0:
             safe_cells.update(all_unknowns)
-        elif remaining_mines == len(all_unknowns):
-            # All unknowns are mines
+        # For "all unknowns are mines" rule:
+        # Only trust it if remaining_mines > 0 and equals number of unknowns
+        elif counter_plausible and remaining_mines > 0 and remaining_mines == n_unknowns:
             mine_cells.update(all_unknowns)
 
     changed = True
