@@ -92,6 +92,7 @@ def play_one_game():
     first_click(REGION, ROWS, COLS)
 
     move_count  = 0
+    scan_count  = 0
     guess_count = 0
 
     def _print_game_stats():
@@ -101,9 +102,10 @@ def play_one_game():
         # 1. Capture current board state
         img   = capture_board(REGION)
         board = parse_board(img, ROWS, COLS)
+        scan_count += 1
 
         if DEBUG:
-            print(f"\n── Scan #{move_count + 1} ──")
+            print(f"\n── Scan #{scan_count} ──")
             print_board(board)
 
         # 2. Check for game-over loss (exploded mine detected)
@@ -125,7 +127,7 @@ def play_one_game():
             _print_game_stats()
             return "win"
 
-        moved = False
+        revealed = False
 
         # 5. Flag all confirmed mines
         for (r, c) in mine_cells:
@@ -133,7 +135,6 @@ def play_one_game():
                 break
             print(f"🚩 Flagging mine at row {r+1}, col {c+1}")
             flag_cell(r, c, REGION, ROWS, COLS)
-            moved = True
 
         # 6. Reveal all safe cells
         for (r, c) in safe_cells:
@@ -141,11 +142,11 @@ def play_one_game():
                 break
             print(f"✅ Revealing safe cell at row {r+1}, col {c+1}")
             reveal_cell(r, c, REGION, ROWS, COLS)
-            moved = True
+            revealed = True
             move_count += 1
 
         # 7. If nothing to do, ask human
-        if not moved and not stop_flag.is_set():
+        if not revealed and not stop_flag.is_set():
             if not ambiguous:
                 print("\n🎉 No more unknown cells — game likely finished!")
                 _print_game_stats()

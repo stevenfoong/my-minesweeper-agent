@@ -67,12 +67,10 @@ def solve(board):
         new_constraints = []
 
         for cells, mine_count in constraints:
-            # Remove already-decided cells from this constraint
+            # Count known mines BEFORE removing them from the cell set
+            mine_count -= sum(1 for c in mine_cells if c in cells)
+            # Now remove already-decided cells from this constraint
             cells = cells - mine_cells - safe_cells
-            mine_count -= sum(
-                1 for c in list(mine_cells)
-                if c in cells
-            )
             # Recompute after removing known mines
             clean_cells = frozenset(
                 c for c in cells if board[c[0]][c[1]] == UNKNOWN
