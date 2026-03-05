@@ -4,6 +4,7 @@ import numpy as np
 # ── Cell state constants ──────────────────────────────────────────────────────
 UNKNOWN  = -1   # unrevealed cell
 FLAGGED  = -2   # flagged as mine
+EXPLODED = -3   # mine that was clicked — red background (game over)
 EMPTY    =  0   # revealed, no adjacent mines
 # 1–8 = number of adjacent mines
 
@@ -33,6 +34,18 @@ def classify_cell(cell_bgr: np.ndarray) -> int:
     Uses color matching against known minesweeper.online palette.
     """
     h, w = cell_bgr.shape[:2]
+
+    # --- Check for exploded mine: most of the cell background is red ---
+    # (The mine that was clicked has a solid red background, unlike a flag
+    #  which only has a small red flag icon in the centre.)
+    total_pixels = h * w
+    red_pixels_all = np.sum(
+        (cell_bgr[:, :, 2] > 150) &   # high red channel  (BGR index 2)
+        (cell_bgr[:, :, 1] < 100) &   # low green channel (BGR index 1)
+        (cell_bgr[:, :, 0] < 100)     # low blue channel  (BGR index 0)
+    )
+    if red_pixels_all > total_pixels * 0.25:
+        return EXPLODED
 
     # --- Check for flag (look for red pixels in center region) ---
     center = cell_bgr[h//4:3*h//4, w//4:3*w//4]
@@ -101,6 +114,10 @@ def parse_board(img_rgb: np.ndarray, rows: int, cols: int) -> list[list[int]]:
 
 def print_board(board: list[list[int]]):
     """Debug: print board to console."""
-    symbols = {-1: "?", -2: "F", 0: "."}
+    symbols = {-1: "?", -2: "F", -3: "X", 0: "."}
     for row in board:
         print(" ".join(symbols.get(c, str(c)) for c in row))
+
+def is_game_over(board: list[list[int]]) -> bool:
+    """Return True if an exploded mine is present on the board (game lost)."""
+    return any(cell == EXPLODED for row in board for cell in row)
