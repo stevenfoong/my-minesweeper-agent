@@ -19,12 +19,12 @@ def calibrate():
     height = y2 - y1
 
     print("\n✅ Copy this into main.py:")
-    print(f'REGION = {{"top": {{y1}}, "left": {{x1}}, "width": {{width}}, "height": {{height}}}}')
+    print(f'REGION = {{"top": {y1}, "left": {x1}, "width": {width}, "height": {height}}}')
 
     # Auto-detect cell size (minesweeper.online uses 32px cells at default zoom)
     cell_w = width  // 30   # beginner=9, intermediate=16, expert=30
     cell_h = height // 16
-    print(f"Estimated cell size: {{cell_w}}x{{cell_h}}px")
+    print(f"Estimated cell size: {cell_w}x{cell_h}px")
 
 if __name__ == "__main__":
     calibrate()
