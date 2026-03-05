@@ -4,8 +4,8 @@ import time
 import threading
 import pyautogui
 import keyboard  # pip install keyboard
-from capture      import capture_board, save_screenshot
-from board_parser import parse_board, print_board, is_game_over
+from capture      import capture_board, capture_counter, save_screenshot
+from board_parser import parse_board, print_board, is_game_over, parse_mine_counter
 from solver       import solve
 from controller   import reveal_cell, flag_cell, start_new_game
 
@@ -18,8 +18,18 @@ from controller   import reveal_cell, flag_cell, start_new_game
 
 _CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.local.json")
 
+def _default_counter_region(region: dict) -> dict:
+    """Compute a default counter region from the board region."""
+    top = max(0, region["top"] - 60)
+    return {
+        "top":    top,
+        "left":   region["left"],
+        "width":  80,
+        "height": 40,
+    }
+
 def load_local_config():
-    """Load REGION, ROWS, COLS from config.local.json, falling back to hardcoded defaults."""
+    """Load REGION, ROWS, COLS, COUNTER_REGION from config.local.json, falling back to hardcoded defaults."""
     try:
         with open(_CONFIG_FILE, encoding="utf-8") as f:
             cfg = json.load(f)
@@ -28,16 +38,20 @@ def load_local_config():
         cols   = int(cfg["cols"])
         if rows <= 0 or cols <= 0:
             raise ValueError("rows and cols must be positive integers")
+        # Load counter_region from config if present, otherwise compute from region
+        counter_region = cfg.get("counter_region") or _default_counter_region(region)
         print("⚙️  Loaded config from config.local.json")
-        return region, rows, cols
+        return region, rows, cols, counter_region
     except FileNotFoundError:
         print("⚠️  config.local.json not found — using hardcoded defaults. Run calibrate.py first!")
-        return {"top": 300, "left": 400, "width": 960, "height": 512}, 16, 30
+        region = {"top": 300, "left": 400, "width": 960, "height": 512}
+        return region, 16, 30, _default_counter_region(region)
     except (json.JSONDecodeError, KeyError, ValueError) as e:
         print(f"⚠️  config.local.json is invalid ({e}) — using hardcoded defaults. Run calibrate.py first!")
-        return {"top": 300, "left": 400, "width": 960, "height": 512}, 16, 30
+        region = {"top": 300, "left": 400, "width": 960, "height": 512}
+        return region, 16, 30, _default_counter_region(region)
 
-REGION, ROWS, COLS = load_local_config()
+REGION, ROWS, COLS, COUNTER_REGION = load_local_config()
 
 LOOP_DELAY   = 0.4   # seconds between board scans
 DEBUG        = True  # print board state each loop
@@ -126,39 +140,58 @@ def play_one_game():
         board = parse_board(img, ROWS, COLS)
         scan_count += 1
 
+        # 2. Capture and parse mine counter
+        try:
+            counter_img    = capture_counter(COUNTER_REGION)
+            remaining_mines = parse_mine_counter(counter_img)
+        except Exception:
+            remaining_mines = None
+
         if DEBUG:
             print(f"\n── Scan #{scan_count} ──")
             print_board(board)
+            if remaining_mines is not None:
+                print(f"   💣 Mines remaining: {remaining_mines}")
+            else:
+                print("   ⚠️  Mine counter parse failed — proceeding without counter info")
 
-        # 2. Check for game-over loss (exploded mine detected)
+        # 3. Check for game-over loss (exploded mine detected)
         if is_game_over(board):
             print("\n💥 Mine hit — game over! (loss)")
             _print_game_stats()
             return "loss"
 
-        # 3. Run solver
-        safe_cells, mine_cells, ambiguous = solve(board)
-
-        # 4. Check win condition
+        # 4. Count unknown cells
         unknowns_total = sum(
             1 for r in range(ROWS) for c in range(COLS)
             if board[r][c] == -1
         )
+
+        # 5. Run solver (pass remaining_mines for global constraint; None falls back gracefully)
+        safe_cells, mine_cells, ambiguous = solve(board, remaining_mines)
+
+        # 6. Check win condition
         if unknowns_total == 0:
             print("\n🎉 Board complete! (win)")
             _print_game_stats()
             return "win"
 
+        # Win via counter: counter is 0 and no ambiguous cells remain after solving
+        if remaining_mines is not None and remaining_mines == 0 and not ambiguous:
+            print("\n🎉 Mine counter reads 0 and no ambiguous cells — game won!")
+            _print_game_stats()
+            return "win"
+
         revealed = False
 
-        # 5. Flag all confirmed mines
+        # 7. Flag all confirmed mines
         for (r, c) in mine_cells:
             if stop_flag.is_set():
                 break
             print(f"🚩 Flagging mine at row {r+1}, col {c+1}")
             flag_cell(r, c, REGION, ROWS, COLS)
 
-        # 6. Reveal all safe cells
+        # 8. Reveal all safe cells
         for (r, c) in safe_cells:
             if stop_flag.is_set():
                 break
@@ -167,7 +200,7 @@ def play_one_game():
             revealed = True
             move_count += 1
 
-        # 7. If nothing to do, ask human
+        # 9. If nothing to do, ask human
         if not revealed and not stop_flag.is_set():
             if not ambiguous:
                 print("\n🎉 No more unknown cells — game likely finished!")
