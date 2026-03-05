@@ -1,5 +1,7 @@
 import time
+import threading
 import pyautogui
+import keyboard  # pip install keyboard
 from capture      import capture_board, save_screenshot
 from board_parser import parse_board, print_board
 from solver       import solve
@@ -18,7 +20,24 @@ ROWS, COLS = 16, 30   # Expert mode
 LOOP_DELAY   = 0.4   # seconds between board scans
 DEBUG        = True  # print board state each loop
 
+# ── STOP FLAG ─────────────────────────────────────────────────────────────────
+# Shared flag — set to True when Ctrl+S is pressed to stop the bot gracefully
+stop_flag = threading.Event()
+
+def setup_hotkey():
+    """
+    Register Ctrl+S as a global hotkey to stop the bot.
+    Runs in a background thread so it works even when the browser is in focus.
+    """
+    def on_stop():
+        print("\n🛑 Ctrl+S detected — stopping the bot gracefully...")
+        stop_flag.set()
+
+    keyboard.add_hotkey("ctrl+s", on_stop)
+    keyboard.wait()  # blocks this thread, listening for hotkeys
+
 # ──────────────────────────────────────────────────────────────────────────────
+
 def ask_user(ambiguous: list, board) -> tuple:
     """
     When logic is exhausted, show ambiguous cells and ask human to choose.
@@ -41,6 +60,9 @@ def ask_user(ambiguous: list, board) -> tuple:
     print("     quit           -> stop the bot")
 
     while True:
+        # Also check stop_flag while waiting for user input
+        if stop_flag.is_set():
+            return "quit", None
         choice = input("\n> ").strip().lower()
         if choice == "skip":
             return None, None
@@ -66,21 +88,32 @@ def main():
     print("=" * 50)
     print(f"   Board: {ROWS}x{COLS}")
     print(f"   Region: {REGION}")
+    print("\n   ⌨️  Press Ctrl+S at any time to stop the bot.")
     print("\n⚡ Switch to your browser now! Starting in 3 seconds...")
+
+    # Start hotkey listener in a background daemon thread
+    hotkey_thread = threading.Thread(target=setup_hotkey, daemon=True)
+    hotkey_thread.start()
+
     time.sleep(3)
+
+    # Check if already stopped before even starting
+    if stop_flag.is_set():
+        print("👋 Bot stopped before starting.")
+        return
 
     first_click(REGION, ROWS, COLS)
 
     move_count  = 0
     guess_count = 0
 
-    while True:
+    while not stop_flag.is_set():
         # 1. Capture current board state
         img   = capture_board(REGION)
         board = parse_board(img, ROWS, COLS)
 
         if DEBUG:
-            print(f"\n── Scan #{move_count + 1} ──")
+            print(f"\n── Scan #{{move_count + 1}} ──")
             print_board(board)
 
         # 2. Run solver
@@ -99,19 +132,23 @@ def main():
 
         # 4. Flag all confirmed mines
         for (r, c) in mine_cells:
-            print(f"🚩 Flagging mine at row {r+1}, col {c+1}")
+            if stop_flag.is_set():
+                break
+            print(f"🚩 Flagging mine at row {{r+1}}, col {{c+1}}")
             flag_cell(r, c, REGION, ROWS, COLS)
             moved = True
 
         # 5. Reveal all safe cells
         for (r, c) in safe_cells:
-            print(f"✅ Revealing safe cell at row {r+1}, col {c+1}")
+            if stop_flag.is_set():
+                break
+            print(f"✅ Revealing safe cell at row {{r+1}}, col {{c+1}}")
             reveal_cell(r, c, REGION, ROWS, COLS)
             moved = True
             move_count += 1
 
         # 6. If nothing to do, ask human
-        if not moved:
+        if not moved and not stop_flag.is_set():
             if not ambiguous:
                 print("\n🎉 No more unknown cells — game likely finished!")
                 break
@@ -128,15 +165,18 @@ def main():
 
             r, c = result
             if is_flag:
-                print(f"🚩 User flagging ({r+1}, {c+1})")
+                print(f"🚩 User flagging ({{r+1}}, {{c+1}})")
                 flag_cell(r, c, REGION, ROWS, COLS)
             else:
-                print(f"🖱️  User revealing ({r+1}, {c+1})")
+                print(f"🖱️  User revealing ({{r+1}}, {{c+1}})")
                 reveal_cell(r, c, REGION, ROWS, COLS)
 
         time.sleep(LOOP_DELAY)
 
-    print(f"\n📊 Stats: {move_count} logical moves, {guess_count} user guesses")
+    if stop_flag.is_set():
+        print("\n🛑 Bot stopped via Ctrl+S.")
+
+    print(f"\n📊 Stats: {{move_count}} logical moves, {{guess_count}} user guesses")
 
 if __name__ == "__main__":
     main()
