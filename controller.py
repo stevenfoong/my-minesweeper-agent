@@ -21,9 +21,7 @@ def flag_cell(r, c, region, rows, cols):
     pyautogui.click(x, y, button="right")
 
 def chord_cell(r, c, region, rows, cols):
-    """
-    Double-click (chord) on a numbered cell to auto-reveal all
-    non-flagged neighbors when correct number of flags are placed.
-    """
+    """Double-click (chord) on a numbered cell to auto-reveal all
+    non-flagged neighbors when correct number of flags are placed."""
     x, y = cell_center(r, c, region, rows, cols)
     pyautogui.doubleClick(x, y)

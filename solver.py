@@ -2,8 +2,8 @@
 Minesweeper constraint-based solver.
 
 Phase 1: Basic rules
-  - If a numbered cell has exactly N unknown neighbours and N remaining mines → all are mines
-  - If a numbered cell has 0 remaining mines → all unknown neighbours are safe
+  - If a numbered cell has exactly N unknown neighbours and N remaining mines -> all are mines
+  - If a numbered cell has 0 remaining mines -> all unknown neighbours are safe
 
 Phase 2: Subset constraint
   - If constraint A is a strict subset of constraint B, the difference cells
@@ -71,10 +71,9 @@ def solve(board):
             cells = cells - mine_cells - safe_cells
             mine_count -= sum(
                 1 for c in list(mine_cells)
-                if c in cells  # already subtracted above but safety check
+                if c in cells
             )
             # Recompute after removing known mines
-            flagged_in_set = 0
             clean_cells = frozenset(
                 c for c in cells if board[c[0]][c[1]] == UNKNOWN
             )
@@ -91,7 +90,7 @@ def solve(board):
 
             new_constraints.append((clean_cells, mine_count))
 
-        # Subset rule: if A ⊂ B, then B-A has (mines_B - mines_A) mines
+        # Subset rule: if A is subset of B, then B-A has (mines_B - mines_A) mines
         for i, (cells_a, mines_a) in enumerate(new_constraints):
             for j, (cells_b, mines_b) in enumerate(new_constraints):
                 if i == j or not cells_a or not cells_b:

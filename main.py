@@ -12,14 +12,13 @@ from controller   import reveal_cell, flag_cell
 #   Intermediate: 16x16, 40 mines
 #   Expert:       16x30, 99 mines
 
-REGION = {"top": 300, "left": 400, "width": 960, "height": 512}  # ← update via calibrate.py
+REGION = {"top": 300, "left": 400, "width": 960, "height": 512}  # update via calibrate.py
 ROWS, COLS = 16, 30   # Expert mode
 
 LOOP_DELAY   = 0.4   # seconds between board scans
 DEBUG        = True  # print board state each loop
 
 # ──────────────────────────────────────────────────────────────────────────────
-
 def ask_user(ambiguous: list, board) -> tuple:
     """
     When logic is exhausted, show ambiguous cells and ask human to choose.
@@ -36,10 +35,10 @@ def ask_user(ambiguous: list, board) -> tuple:
         print(f"   [{i}] Row {r+1:2d}, Col {c+1:2d}")
 
     print("\n   Commands:")
-    print("     <number>       → reveal that cell")
-    print("     f<number>      → flag that cell as mine")
-    print("     skip           → skip this turn (re-scan board)")
-    print("     quit           → stop the bot")
+    print("     <number>       -> reveal that cell")
+    print("     f<number>      -> flag that cell as mine")
+    print("     skip           -> skip this turn (re-scan board)")
+    print("     quit           -> stop the bot")
 
     while True:
         choice = input("\n> ").strip().lower()
