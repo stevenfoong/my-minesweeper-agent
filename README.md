@@ -35,53 +35,133 @@ my-minesweeper-agent/
 
 ---
 
-## Quick Start
+## 🪟 Windows Setup Guide
 
-### 1. Install dependencies
+Follow these steps to get everything installed and running on Windows.
 
-```bash
+### Step 1 — Install Python
+
+1. Go to the official Python download page:  
+   👉 **https://www.python.org/downloads/windows/**
+
+2. Click **"Download Python 3.x.x"** (latest stable version).
+
+3. Run the installer (`.exe` file). On the first screen, **tick the checkbox**:  
+   ☑️ **"Add Python to PATH"** ← This is important!
+
+4. Click **"Install Now"** and wait for it to finish.
+
+5. Verify the installation — open **Command Prompt** (`Win + R`, type `cmd`, press Enter) and run:
+   ```cmd
+   python --version
+   ```
+   You should see something like `Python 3.12.x`.
+
+---
+
+### Step 2 — Install Git (to download this project)
+
+1. Go to 👉 **https://git-scm.com/download/win**
+2. Download and run the installer, accepting all defaults.
+3. Verify:
+   ```cmd
+   git --version
+   ```
+
+---
+
+### Step 3 — Download This Project
+
+Open **Command Prompt** and run:
+
+```cmd
+git clone https://github.com/stevenfoong/my-minesweeper-agent.git
+cd my-minesweeper-agent
+```
+
+---
+
+### Step 4 — Install Python Dependencies
+
+Inside the project folder, run:
+
+```cmd
 pip install -r requirements.txt
 ```
 
-### 2. Calibrate your board region
+This installs: `mss`, `pillow`, `opencv-python`, `pyautogui`, `numpy`.
 
-```bash
-python calibrate.py
+> ⚠️ If you get an error like `pip not found`, try `python -m pip install -r requirements.txt` instead.
+
+---
+
+### Step 5 — Calibrate Your Board Region
+
+1. Open **[minesweeper.online](https://minesweeper.online/)** in your browser.
+2. Set browser zoom to **100%** by pressing `Ctrl + 0`.
+3. Start a **new game**.
+4. In Command Prompt, run:
+   ```cmd
+   python calibrate.py
+   ```
+5. Follow the prompts — hover your mouse over the **top-left corner** of the board grid and press Enter, then hover over the **bottom-right corner** and press Enter.
+6. The script will print a `REGION` value. **Copy it**.
+
+---
+
+### Step 6 — Configure the Bot
+
+Open `main.py` in Notepad or any text editor:
+
+```cmd
+notepad main.py
 ```
 
-Follow the prompts — move your mouse to the top-left and bottom-right corners of the board grid. Copy the output `REGION` value into `main.py`.
+Update these two settings near the top of the file:
 
-### 3. Configure difficulty
+```python
+REGION = {"top": ???, "left": ???, "width": ???, "height": ???}  # ← paste from calibrate.py
+ROWS, COLS = 16, 30  # ← change to match your difficulty
+```
 
-In `main.py`, set `ROWS` and `COLS` to match your chosen difficulty:
-
-| Difficulty   | Rows | Cols | Mines |
+| Difficulty   | ROWS | COLS | Mines |
 |--------------|------|------|-------|
 | Beginner     | 9    | 9    | 10    |
 | Intermediate | 16   | 16   | 40    |
 | Expert       | 16   | 30   | 99    |
 
-### 4. Run the bot
-
-Open [minesweeper.online](https://minesweeper.online/) in your browser, start a **new game**, then run:
-
-```bash
-python main.py
-```
-
-You have **3 seconds** to switch to your browser window!
+Save the file (`Ctrl + S`).
 
 ---
 
-## Tips
+### Step 7 — Launch the Agent! 🚀
+
+1. In your browser, open [minesweeper.online](https://minesweeper.online/) and start a **new game**.
+2. In Command Prompt, run:
+   ```cmd
+   python main.py
+   ```
+3. You have **3 seconds** to click on your browser window — the bot will then start playing!
+
+---
+
+### 🛑 How to Stop the Bot
+
+- Press `Ctrl + C` in Command Prompt at any time to stop.
+- Or type `quit` when the bot asks you for a manual decision.
+
+---
+
+## Tips for Windows
 
 | Tip | Detail |
 |-----|--------|
-| **Browser zoom** | Set to **100%** (Ctrl+0) — cell sizes change with zoom |
-| **Start with Beginner** | Test the bot on 9×9 before scaling up |
+| **Browser zoom** | Set to **100%** (`Ctrl + 0`) — cell sizes change with zoom |
+| **Display scaling** | If on a high-DPI monitor (e.g. 125% or 150% Windows scaling), go to **Display Settings → Scale** and set to **100%** while using the bot |
+| **Run as normal user** | No admin rights needed |
+| **Start with Beginner** | Test the bot on 9×9 before scaling up to Expert |
 | **Debug mode** | Set `DEBUG = True` in `main.py` to print board state each scan |
-| **HiDPI / Retina screens** | On Mac Retina or Windows >100% scaling, divide pixel coords by 2 |
-| **Color tuning** | If the parser misreads cells, save `debug_board.png` and sample pixel colors |
+| **Color tuning** | If the parser misreads cells, save `debug_board.png` and inspect pixel colors |
 
 ---
 
@@ -93,6 +173,7 @@ Screen Capture → Parse Board → Apply Logic → Click/Flag → Repeat
                             (if ambiguous)
                         Ask User for Decision
 ```
+
 ### Phase 1 — Basic Rules
 - If a numbered cell's remaining mine count equals its unknown neighbour count → all unknowns are mines
 - If a numbered cell's remaining mine count is 0 → all unknown neighbours are safe
