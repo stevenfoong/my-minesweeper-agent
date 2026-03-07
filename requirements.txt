@@ -4,3 +4,4 @@ opencv-python
 pyautogui
 numpy
 keyboard
+pywin32

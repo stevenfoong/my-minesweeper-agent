@@ -30,8 +30,11 @@ OUTLINE_WIDTH = 3
 LABEL_FONT    = ("Arial", 7, "bold")
 
 # ── Grid auto-detection parameters ────────────────────────────────────────────
-CELL_COLOR_BGR  = (192, 192, 192)   # silver/grey unrevealed cell (BGR)
-CELL_TOLERANCE  = 15                 # ± per channel
+CELL_COLORS_BGR = [
+    (192, 192, 192),   # unrevealed cell
+    (224, 224, 224),   # revealed/empty cell
+]
+CELL_TOLERANCE  = 18                 # ± per channel
 DEFAULT_ROWS    = 16
 DEFAULT_COLS    = 30
 
@@ -81,9 +84,12 @@ def detect_board_region(img_rgb: np.ndarray) -> tuple[int, int, int, int, int, i
     img_h, img_w = img_rgb.shape[:2]
     img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
 
-    lo = np.array([max(0, c - CELL_TOLERANCE) for c in CELL_COLOR_BGR], dtype=np.uint8)
-    hi = np.array([min(255, c + CELL_TOLERANCE) for c in CELL_COLOR_BGR], dtype=np.uint8)
-    mask = cv2.inRange(img_bgr, lo, hi)
+    # Build a union mask of both cell colours
+    mask = np.zeros(img_bgr.shape[:2], dtype=np.uint8)
+    for color in CELL_COLORS_BGR:
+        lo = np.array([max(0, c - CELL_TOLERANCE) for c in color], dtype=np.uint8)
+        hi = np.array([min(255, c + CELL_TOLERANCE) for c in color], dtype=np.uint8)
+        mask = cv2.bitwise_or(mask, cv2.inRange(img_bgr, lo, hi))
 
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
