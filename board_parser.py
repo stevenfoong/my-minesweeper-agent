@@ -30,7 +30,7 @@ NUMBER_COLORS_BGR = {
 
 def classify_cell(cell_bgr: np.ndarray) -> int:
     """
-    Classify a single 32x32 cell image.
+    Classify a single cell image (any size).
     Uses color matching against known minesweeper.online palette.
     """
     h, w = cell_bgr.shape[:2]
