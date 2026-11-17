@@ -1,7 +1,0 @@
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-debug_board.png
-debug_counter.png
-config.local.json

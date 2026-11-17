@@ -1,188 +1,104 @@
-# 🎮 My Minesweeper Agent
+# Minesweeper Online Helper Overlay
 
-A Python bot that plays Minesweeper on [minesweeper.online](https://minesweeper.online/) using constraint-based logic solving. When the logic engine cannot determine a safe move, it asks the human player to decide.
+A browser overlay for [minesweeper.online](https://minesweeper.online). It analyses the board while you play. It shows which cells are safe to open, which are certain mines, and the chance of a mine in every other closed cell.
+
+It only reads the page and draws on top of it. It never clicks or plays for you.
+
+| Mark on a cell | Meaning |
+|---|---|
+| Green **✓** | 100% safe, you can open it |
+| Red **✖** | Certain mine, you can flag it |
+| Number with a green→red tint | Chance (in %) that this cell is a mine |
+| Blue outline | The safest guess. Shown only when no cell is 100% safe |
+| *Italic* number | Estimate only (the area was too large to solve exactly) |
+
+A small panel in the top-right corner of the page shows:
+- how many safe cells and certain mines there are
+- how risky the best guess is, when you have to guess
+- warnings, for example when your flags don't match the numbers
+
+The panel has buttons to turn the overlay or the percentages on and off. **Alt+H** also turns the overlay on and off. Your choices are remembered. The overlay hides when the game is over.
+
+## Installation
+
+Choose **one** of the three options.
+
+### Option 1: Userscript (recommended, starts by itself)
+
+1. Install a userscript extension:
+   - [Tampermonkey](https://www.tampermonkey.net/) (Chrome, Edge, Firefox, Safari), or
+   - [Violentmonkey](https://violentmonkey.github.io/) (Chrome, Edge, Firefox).
+2. **Chrome and Edge only:** allow the extension to run user scripts:
+   1. Open `chrome://extensions` (or `edge://extensions`).
+   2. Click **Details** on Tampermonkey.
+   3. Turn on **Allow User Scripts**.
+   4. On older browser versions this option doesn't exist. Turn on **Developer mode** (top-right corner of the extensions page) instead.
+
+   If you skip this step, the script is installed but never runs. Tampermonkey then shows a banner asking you to enable *Allow User Scripts*.
+3. Open the Tampermonkey menu and choose **Create a new script**.
+4. Delete the template text, then paste the whole contents of [`minesweeper-helper.user.js`](minesweeper-helper.user.js).
+5. Save with **Ctrl+S**.
+6. Open or refresh minesweeper.online. The **Minesweeper helper** panel appears in the top-right corner.
+
+### Option 2: Bookmarklet (no extension needed)
+
+1. Create a new bookmark in your browser, with any name.
+2. As its URL, paste the whole contents of [`bookmarklet.txt`](bookmarklet.txt). It's a single long line that starts with `javascript:`.
+3. On the game page, click the bookmark to start the helper. Click it again to toggle the overlay.
+
+You need to click it again after every page reload.
+
+### Option 3: Browser console (one-off)
+
+1. On the game page, press **F12** and open the **Console** tab.
+2. Paste the contents of `minesweeper-helper.user.js` and press **Enter**. Chrome may first ask you to type `allow pasting`.
+
+## Usage
+
+1. Start a game and open your first cell. The overlay stays empty until at least one cell is open.
+2. Open the green ✓ cells and flag the red ✖ cells.
+3. When nothing is green, the blue outline marks the lowest-risk cell. It is still a gamble, so check the percentage.
+
+**Your flags are treated as mines.** If you place a wrong flag, the panel shows an *inconsistent* warning. Remove the flag and the numbers recalculate.
+
+Works with every board size (Beginner, Intermediate, Expert, Custom), the dark and light themes, and any zoom level.
+
+## How it works
+
+1. **Reading the board.** Four times a second, the script reads each cell's state from the page's `div.cell` elements:
+   - `*_closed`: closed cell
+   - `*_flag`: flagged cell
+   - `*_opened *_typeN`: opened cell showing the number N
+   - type 10 or higher: a mine shown after the game ends
+
+   The total number of mines is the mine counter plus the number of flags. If the board hasn't changed since the last read, nothing is recalculated.
+2. **Simple deductions.** If a number already has as many mines around it as it shows, its other closed neighbours are safe. If a number has exactly as many closed neighbours as mines still missing, they are all mines. These rules are repeated until nothing changes.
+3. **Exact probabilities.** The remaining closed cells next to numbers are split into separate groups. For each group the script lists every mine layout that fits all the numbers, using backtracking.
+4. **Global mine count.** Each combination of layouts across groups is weighted by how many ways the leftover mines can be placed in the closed cells that touch no number. This gives exact mine probabilities, the same result you would get by checking every possible board. Cells that touch no number all get the same probability.
+5. **Drawing.** A see-through layer is placed exactly over the cells (`pointer-events: none`), so all your clicks still reach the game.
+
+A group that needs more than 2 million search steps falls back to a simple local estimate. Those cells are shown in *italics*.
+
+## Fair play
+
+minesweeper.online has ranked games and leaderboards. Using an assistant in ranked games is likely against the site's rules. Use this helper for practice, learning, and unranked or custom games.
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| Nothing appears after installing | Enable **Allow User Scripts** or **Developer mode** for Tampermonkey (see Option 1, step 2), then refresh the page |
+| The panel shows but the board has no marks | Open at least one cell. Also check that the overlay is on (**Alt+H**) |
+| "Inconsistent — check your flags" | One of your flags is wrong. Remove flags near the cell the warning names |
+| The site changed its layout and the helper stopped working | The cell class names may have changed. Open an issue with a screenshot |
+
+## Files
+
+| File | Purpose |
+|---|---|
+| `minesweeper-helper.user.js` | The full script: solver, board reader and overlay. Install it as a userscript or paste it into the console |
+| `bookmarklet.txt` | The same script packed as a bookmarklet URL |
 
 ## License
 
-This project is licensed under the **GNU General Public License v3.0 (GPL-3.0)**.  
-Any modification or derivative work must also be released under GPL-3.0.
-
----
-
-## Features
-
-- 🧠 **Logic-based solver** — uses constraint propagation and subset rules
-- 🚩 **Auto-flagging** — flags confirmed mines automatically
-- ✅ **Auto-revealing** — clicks confirmed safe cells automatically
-- ❓ **Human fallback** — asks you to decide when logic is insufficient
-- 🖥️ **Screen capture** — reads the board directly from your browser
-- 🖱️ **Mouse control** — clicks and right-clicks via pyautogui
-
----
-
-## Project Structure
-
-```
-my-minesweeper-agent/
-├── main.py           ← Main loop: capture → parse → solve → act
-├── capture.py        ← Screen capture using mss
-├── board_parser.py   ← Image recognition to read board state
-├── solver.py         ← Constraint-based logic solver
-├── controller.py     ← Mouse click/flag controller
-├── calibrate.py      ← Tool to find your board's screen region
-└── requirements.txt  ← Python dependencies
-```
-
----
-
-## 🪟 Windows Setup Guide
-
-Follow these steps to get everything installed and running on Windows.
-
-### Step 1 — Install Python
-
-1. Go to the official Python download page:  
-   👉 **https://www.python.org/downloads/windows/**
-
-2. Click **"Download Python 3.x.x"** (latest stable version).
-
-3. Run the installer (`.exe` file). On the first screen, **tick the checkbox**:  
-   ☑️ **"Add Python to PATH"** ← This is important!
-
-4. Click **"Install Now"** and wait for it to finish.
-
-5. Verify the installation — open **Command Prompt** (`Win + R`, type `cmd`, press Enter) and run:
-   ```cmd
-   python --version
-   ```
-   You should see something like `Python 3.12.x`.
-
----
-
-### Step 2 — Install Git (to download this project)
-
-1. Go to 👉 **https://git-scm.com/download/win**
-2. Download and run the installer, accepting all defaults.
-3. Verify:
-   ```cmd
-   git --version
-   ```
-
----
-
-### Step 3 — Download This Project
-
-Open **Command Prompt** and run:
-
-```cmd
-git clone https://github.com/stevenfoong/my-minesweeper-agent.git
-cd my-minesweeper-agent
-```
-
----
-
-### Step 4 — Install Python Dependencies
-
-Inside the project folder, run:
-
-```cmd
-pip install -r requirements.txt
-```
-
-This installs: `mss`, `pillow`, `opencv-python`, `pyautogui`, `numpy`.
-
-> ⚠️ If you get an error like `pip not found`, try `python -m pip install -r requirements.txt` instead.
-
----
-
-### Step 5 — Calibrate Your Board Region
-
-1. Open **[minesweeper.online](https://minesweeper.online/)** in your browser.
-2. Set browser zoom to **100%** by pressing `Ctrl + 0`.
-3. Start a **new game**.
-4. In Command Prompt, run:
-   ```cmd
-   python calibrate.py
-   ```
-5. Follow the prompts — hover your mouse over the **top-left corner** of the board grid and press Enter, then hover over the **bottom-right corner** and press Enter.
-6. The script will print a `REGION` value. **Copy it**.
-
----
-
-### Step 6 — Configure the Bot
-
-Open `main.py` in Notepad or any text editor:
-
-```cmd
-notepad main.py
-```
-
-Update these two settings near the top of the file:
-
-```python
-REGION = {"top": ???, "left": ???, "width": ???, "height": ???}  # ← paste from calibrate.py
-ROWS, COLS = 16, 30  # ← change to match your difficulty
-```
-
-| Difficulty   | ROWS | COLS | Mines |
-|--------------|------|------|-------|
-| Beginner     | 9    | 9    | 10    |
-| Intermediate | 16   | 16   | 40    |
-| Expert       | 16   | 30   | 99    |
-
-Save the file (`Ctrl + S`).
-
----
-
-### Step 7 — Launch the Agent! 🚀
-
-1. In your browser, open [minesweeper.online](https://minesweeper.online/) and start a **new game**.
-2. In Command Prompt, run:
-   ```cmd
-   python main.py
-   ```
-3. You have **3 seconds** to click on your browser window — the bot will then start playing!
-
----
-
-### 🛑 How to Stop the Bot
-
-- Press `Ctrl + C` in Command Prompt at any time to stop.
-- Or type `quit` when the bot asks you for a manual decision.
-
----
-
-## Tips for Windows
-
-| Tip | Detail |
-|-----|--------|
-| **Browser zoom** | Set to **100%** (`Ctrl + 0`) — cell sizes change with zoom |
-| **Display scaling** | If on a high-DPI monitor (e.g. 125% or 150% Windows scaling), go to **Display Settings → Scale** and set to **100%** while using the bot |
-| **Run as normal user** | No admin rights needed |
-| **Start with Beginner** | Test the bot on 9×9 before scaling up to Expert |
-| **Debug mode** | Set `DEBUG = True` in `main.py` to print board state each scan |
-| **Color tuning** | If the parser misreads cells, save `debug_board.png` and inspect pixel colors |
-
----
-
-## How the Solver Works
-
-```
-Screen Capture → Parse Board → Apply Logic → Click/Flag → Repeat
-                                    ↓
-                            (if ambiguous)
-                        Ask User for Decision
-```
-
-### Phase 1 — Basic Rules
-- If a numbered cell's remaining mine count equals its unknown neighbour count → all unknowns are mines
-- If a numbered cell's remaining mine count is 0 → all unknown neighbours are safe
-
-### Phase 2 — Subset Constraint
-- If constraint A is a strict subset of constraint B, the difference cells have `(mines_B - mines_A)` mines, enabling further deductions
-
----
-
-## Contributing
-
-Pull requests are welcome! Please ensure any modifications are also released under **GPL-3.0**.
+GPL-3.0. See [LICENSE](LICENSE).
