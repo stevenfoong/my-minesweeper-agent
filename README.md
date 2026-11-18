@@ -57,12 +57,15 @@ You need to click it again after every page reload.
 
 1. Start a game and open your first cell. The overlay stays empty until at least one cell is open.
 2. Open the green ✓ cells and flag the red ✖ cells.
-3. When nothing is green, the blue outline marks the lowest-risk cell. It is still a gamble, so check the percentage.
+3. When nothing is green, the blue outline marks the lowest-risk cell. It is still a gamble, so check the percentage. Auto Play may instead choose an unopened corner during its guessing phase.
 4. Enter the **number of games to play** (1–999). Click **Start Auto Play**. The agent handles the current board or starts a new game if the current one has already ended.
-5. It marks proven mines (multiple flags can be submitted together), opens 100%-safe tiles, and only makes a guess when no guaranteed safe opening remains. With **Guesses: on**, the guess is always the closed tile with the lowest available estimated mine probability; ties choose the first matching tile. If guesses are disabled, the run stops when it can no longer progress without risk.
-6. Every tile-opening action waits until the target tile has visibly revealed and the board has stopped changing for at least 450 ms. The solver is recalculated on the changed board before another opening is allowed. Certain mine flags are allowed as a batch, but must be reflected on the board before proceeding.
-7. After a game finishes, the agent waits a **random 3–10 seconds** before using the game's smiley-face New Game control. It tracks completed games, wins, and losses and stops after the requested count. A currently completed board is not counted toward the new run.
-8. Click **Stop** at any time, or manually click the board to cancel. Unexpected resets, inconsistent flags, missing game controls, and unacknowledged clicks also stop Auto Play.
+5. On a fresh board, Auto Play randomly chooses **1–3 opening clicks** at arbitrary closed cells (including a random first tile), waiting for each reveal before the next. This deliberately ignores probability estimates during the opening phase. On a board already in progress, Auto Play skips that phase.
+6. After those opening clicks, it flags proven mines (multiple flags can be submitted together), opens 100%-safe tiles, and only guesses when no certain move remains. With **Guesses: on**, it randomly chooses among available closed corners (top-left, top-right, bottom-left, bottom-right). When no unopened corners remain, it chooses the lowest estimated mine probability, breaking equal-probability ties randomly. With guesses off, it stops if no certain move remains.
+7. Every tile-opening action waits until the target tile has visibly revealed and the board has stopped changing for at least 450 ms. The solver is recalculated on the changed board before another opening is allowed. Certain mine flags are allowed as a batch, but must be reflected on the board before proceeding.
+8. After a game finishes, the agent waits a **random 3–10 seconds** before using the game's smiley-face New Game control. It tracks completed games, wins, and losses and stops after the requested count. A currently completed board is not counted toward the new run.
+9. Click **Stop** at any time, or manually click the board to cancel. Unexpected resets, inconsistent flags, missing game controls, and unacknowledged clicks also stop Auto Play.
+
+**Randomized openings and corner guesses can hit mines even when a lower-risk alternative exists.** The first 1–3 opening *clicks* are randomized independently of how many cells an opening reveals. Random opening counts are reset for every automatically started new game.
 
 **Auto Play is opt-in.** The game count and guessing preference are remembered, but an active run is never restored after a reload. The script verifies a server-driven reveal by observing the resulting board DOM (it does not inspect network-level response acknowledgments). It waits up to 15 seconds for a reveal or new-game action to be reflected on the board. If the website stops accepting synthetic mouse events, Auto Play stops rather than blindly continuing.
 

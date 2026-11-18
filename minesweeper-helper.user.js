@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Minesweeper Online Helper Overlay
 // @namespace    local.minesweeper-helper
-// @version      1.2.0
+// @version      1.3.0
 // @description  Shows mine probabilities and offers opt-in automatic play on minesweeper.online
 // @match        https://minesweeper.online/*
 // @grant        none
@@ -267,31 +267,70 @@
     return { cells: order, Wn, P };
   }
 
-  // Select known mines first, then certain-safe tiles, then the lowest risk.
-  function chooseAutoMove(board, result, allowGuess = true) {
+  // Pure helpers shared by each new game and the Node regression tests.
+  // Inject a random() function in tests to make choices deterministic.
+  function randomOpeningCount(random = Math.random) {
+    return 1 + Math.min(2, Math.floor(random() * 3));
+  }
+
+  function pickRandom(items, random) {
+    if (!items.length) return undefined;
+    return items[Math.min(items.length - 1, Math.floor(random() * items.length))];
+  }
+
+  // Opening phase: 1–3 entirely random tile clicks on fresh boards.
+  // Then: mark certain mines, reveal certain-safe cells, choose a random
+  // unopened corner if guessing is required, or fall back to lowest risk.
+  function chooseAutoMove(board, result, allowGuess = true,
+                          random = Math.random, randomOpening = false) {
     const { s, W, H } = board;
-    if (!s.some((v) => v >= 0)) {
-      let i = Math.floor(H / 2) * W + Math.floor(W / 2);
-      if (s[i] !== -1) i = s.indexOf(-1);
-      return i < 0 ? null : { i, action: 'open', first: true };
+    const first = !s.some((v) => v >= 0);
+    if (randomOpening || first) {
+      const available = [];
+      for (let i = 0; i < s.length; i++) {
+        if (s[i] === -1 && board.el[i]) available.push(i);
+      }
+      const i = pickRandom(available, random);
+      return i === undefined ? null : { i, action: 'open', first, randomOpening };
     }
+
     const flags = [];
-    let safe = -1, best = -1, risk = Infinity;
+    let safe = -1, risk = Infinity;
+    let best = [];
     for (let i = 0; i < s.length; i++) {
       if (s[i] !== -1 || !board.el[i] || !Number.isFinite(result.p[i])) continue;
       const p = result.p[i];
       if (!result.approx[i] && result.certain[i] && p === 1) flags.push(i);
       else if (!result.approx[i] && result.certain[i] && p === 0) {
         if (safe < 0) safe = i;
-      } else if (p < risk) { risk = p; best = i; }
+      } else if (p < risk - 1e-12) {
+        risk = p;
+        best = [i];
+      } else if (Math.abs(p - risk) <= 1e-12) {
+        best.push(i);
+      }
     }
+
     if (flags.length) return { action: 'flag-batch', indices: flags };
     if (safe >= 0) return { i: safe, action: 'open' };
-    if (allowGuess && best >= 0) return { i: best, action: 'open', risk };
-    return null;
+    if (!allowGuess) return null;
+
+    // Use a Set to handle degenerate one-row or one-column custom boards.
+    const corners = [...new Set([0, W - 1, (H - 1) * W, W * H - 1])]
+      .filter((i) => s[i] === -1 && board.el[i]);
+    if (corners.length) {
+      const i = pickRandom(corners, random);
+      return { i, action: 'open', corner: true,
+        risk: Number.isFinite(result.p[i]) ? result.p[i] : null };
+    }
+
+    // The old row-major tie-breaking always biased the top-left cell.
+    // When multiple cells share the lowest risk, pick randomly among them.
+    const i = pickRandom(best, random);
+    return i === undefined ? null : { i, action: 'open', risk };
   }
 
-  const api = { solve, chooseAutoMove };
+  const api = { solve, chooseAutoMove, randomOpeningCount };
   if (typeof module !== 'undefined' && module.exports) { module.exports = api; return; }
   if (typeof window === 'undefined') return;
   window.MSHelperSolver = api;
@@ -574,9 +613,14 @@
     autoRun = {
       target: count, completed: 0, wins: 0, losses: 0, phase: 'playing',
       pending: null, opened: openedCount(lastBoard), restartAt: 0,
+      openingTarget: 0, openingRemaining: 0,
     };
     if (lastBoard.over) restartGame();
     else {
+      if (openedCount(lastBoard) === 0 && lastBoard.flags === 0) {
+        autoRun.openingTarget = randomOpeningCount();
+        autoRun.openingRemaining = autoRun.openingTarget;
+      }
       updateRunStatus('Playing.');
       scheduleAuto(0);
     }
@@ -669,6 +713,7 @@
       scheduleAuto(POLL_MS);
       return;
     }
+    if (pending.randomOpening) autoRun.openingRemaining--;
     autoRun.pending = null;
     scheduleAuto(0);
   }
@@ -686,7 +731,9 @@
       if (fresh) {
         autoRun.phase = 'playing';
         autoRun.opened = 0;
-        updateRunStatus('New board ready.');
+        autoRun.openingTarget = randomOpeningCount();
+        autoRun.openingRemaining = autoRun.openingTarget;
+        updateRunStatus('New board ready. Random opening goal: ' + autoRun.openingTarget + '.');
         scheduleAuto(0);
       } else if (Date.now() - autoRun.restartAt > RESTART_TIMEOUT_MS)
         stopAuto('New board was not confirmed after the reset click.');
@@ -710,7 +757,8 @@
       stopAuto('Inconsistent board or flags — Auto Play stopped.');
       return;
     }
-    const move = chooseAutoMove(board, result, opts.guess);
+    const move = chooseAutoMove(board, result, opts.guess, Math.random,
+      autoRun.openingRemaining > 0);
     if (!move) {
       stopAuto(opts.guess ? 'No playable move found.'
         : 'No certain move left. Enable guesses to continue.');
@@ -730,8 +778,11 @@
         stopAuto('Cell not available — Auto Play stopped.'); return;
       }
       autoRun.pending = { action: 'open', i: move.i, sentAt: Date.now(),
-        ackAt: 0, signature: '' };
-      updateRunStatus(move.first ? 'Waiting for first tile to reveal…'
+        ackAt: 0, signature: '', randomOpening: !!move.randomOpening };
+      updateRunStatus(move.randomOpening
+        ? 'Random opening ' + (autoRun.openingTarget - autoRun.openingRemaining + 1)
+          + '/' + autoRun.openingTarget + '; waiting for reveal…'
+        : move.corner ? 'Random corner selected; waiting for reveal…'
         : move.risk != null ? 'Guessing at ' + (move.risk * 100).toFixed(1)
           + '% risk; waiting for reveal…' : 'Waiting for safe tile to reveal…');
     }
