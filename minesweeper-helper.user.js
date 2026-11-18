@@ -376,7 +376,10 @@
   #msh-panel button{background:#333;color:#ddd;border:1px solid #555;border-radius:3px;padding:2px 6px;margin:4px 4px 0 0;cursor:pointer;font-size:11px}
   #msh-panel button.on{background:#2a6f3f;color:#fff}
   #msh-panel .warn{color:#ffb347;max-width:220px}
-  #msh-panel .auto-state{margin-top:5px;max-width:220px;opacity:.85}
+  #msh-panel .auto-state{margin-top:5px;max-width:230px;opacity:.85}
+  #msh-panel .game-limit{display:flex;align-items:center;gap:6px;margin-top:6px}
+  #msh-panel input[type=number]{width:60px;padding:2px 4px;border:1px solid #666;border-radius:3px;background:#12191e;color:#fff}
+  #msh-panel button:disabled{opacity:.45;cursor:not-allowed}
   #msh-panel .legend span{display:inline-block;width:10px;height:10px;margin:0 3px 0 6px;vertical-align:-1px;border-radius:2px}
   `;
   document.head.appendChild(style);
@@ -392,29 +395,45 @@
     <div class="legend"><span style="background:rgba(40,200,90,.8)"></span>safe<span style="background:rgba(230,40,40,.8)"></span>mine<span style="background:none;outline:2px solid #29d3ff"></span>best guess</div>
     <div class="warn" id="msh-warn"></div>
     <button id="msh-on"></button><button id="msh-pct"></button><br>
-    <button id="msh-auto"></button><button id="msh-guess"></button>
+    <label class="game-limit" for="msh-games">Games to play: <input id="msh-games" type="number" min="1" max="999" step="1" value="1"></label>
+    <button id="msh-start">Start Auto Play</button><button id="msh-stop">Stop</button><button id="msh-guess"></button>
     <div class="auto-state" id="msh-auto-state">Auto Play is off.</div>`;
   document.body.appendChild(panel);
   const $ = (id) => panel.querySelector('#' + id);
-  const AUTO_DELAY = 450;
-  const ACTION_TIMEOUT = 2200;
-  let autoOn = false, autoTimer = null, autoPending = null, autoOpened = null;
-  let autoStatus = 'Auto Play is off.';
+  const REVEAL_SETTLE_MS = 450;
+  const FLAG_SETTLE_MS = 200;
+  const RESPONSE_TIMEOUT_MS = 15000;
+  const RESTART_TIMEOUT_MS = 15000;
+  const POLL_MS = 175;
+  let autoRun = null, autoTimer = null, autoStatus = 'Auto Play is off.';
   const syncButtons = () => {
     $('msh-on').textContent = opts.on ? 'Overlay: on' : 'Overlay: off';
     $('msh-on').className = opts.on ? 'on' : '';
     $('msh-pct').textContent = opts.pct ? '%: on' : '%: off';
     $('msh-pct').className = opts.pct ? 'on' : '';
-    $('msh-auto').textContent = autoOn ? 'Stop Auto Play' : 'Start Auto Play';
-    $('msh-auto').className = autoOn ? 'on' : '';
+    $('msh-start').disabled = !!autoRun;
+    $('msh-stop').disabled = !autoRun;
     $('msh-guess').textContent = opts.guess ? 'Guesses: on' : 'Guesses: off';
     $('msh-guess').className = opts.guess ? 'on' : '';
+    $('msh-games').disabled = !!autoRun;
+    if (document.activeElement !== $('msh-games')) $('msh-games').value = opts.games;
     $('msh-auto-state').textContent = autoStatus;
   };
   $('msh-on').onclick = () => { opts.on = !opts.on; saveOpts(); syncButtons(); render(true); };
   $('msh-pct').onclick = () => { opts.pct = !opts.pct; saveOpts(); syncButtons(); render(true); };
   $('msh-guess').onclick = () => { opts.guess = !opts.guess; saveOpts(); syncButtons(); };
-  $('msh-auto').onclick = () => { if (autoOn) stopAuto('Stopped by user.'); else startAuto(); };
+  $('msh-games').onchange = () => {
+    const n = Number($('msh-games').value);
+    if (!Number.isSafeInteger(n) || n < 1 || n > 999) {
+      autoStatus = 'Enter a game count from 1 to 999.';
+    } else {
+      opts.games = n; saveOpts();
+      if (!autoRun) autoStatus = 'Ready for ' + n + ' game(s).';
+    }
+    syncButtons();
+  };
+  $('msh-start').onclick = () => startAuto();
+  $('msh-stop').onclick = () => stopAuto('Stopped by user.');
   syncButtons();
 
   function color(p) {
@@ -428,7 +447,7 @@
   function render(force) {
     const board = readBoard();
     if (!board) {
-      if (autoOn) stopAuto('No board found — Auto Play stopped.');
+      if (autoRun && autoRun.phase !== 'restarting') stopAuto('No board found — Auto Play stopped.');
       lastBoard = null; lastResult = null; lastSig = '';
       layer.innerHTML = ''; $('msh-stats').textContent = 'no board on this page'; return;
     }
@@ -436,7 +455,8 @@
     if (sig !== lastSig) {
       lastSig = sig;
       lastBoard = board;
-      try { lastResult = solve(board); } catch (e) { console.error('[msh]', e); lastResult = null; }
+      if (board.over) lastResult = null;
+      else try { lastResult = solve(board); } catch (e) { console.error('[msh]', e); lastResult = null; }
       force = true;
     } else {
       lastBoard.el = board.el; // elements may be re-created
@@ -448,7 +468,6 @@
   function draw(board, r) {
     layer.innerHTML = '';
     if (board.over) {
-      if (autoOn) stopAuto('Game over — Auto Play stopped.');
       $('msh-stats').textContent = 'Game over — start a new game.'; $('msh-warn').textContent = ''; return;
     }
     if (!r) return;
