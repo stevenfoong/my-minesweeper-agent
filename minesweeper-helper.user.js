@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Minesweeper Online Helper Overlay
 // @namespace    local.minesweeper-helper
-// @version      1.1.0
+// @version      1.2.0
 // @description  Shows mine probabilities and offers opt-in automatic play on minesweeper.online
 // @match        https://minesweeper.online/*
 // @grant        none
@@ -267,7 +267,31 @@
     return { cells: order, Wn, P };
   }
 
-  const api = { solve };
+  // Select known mines first, then certain-safe tiles, then the lowest risk.
+  function chooseAutoMove(board, result, allowGuess = true) {
+    const { s, W, H } = board;
+    if (!s.some((v) => v >= 0)) {
+      let i = Math.floor(H / 2) * W + Math.floor(W / 2);
+      if (s[i] !== -1) i = s.indexOf(-1);
+      return i < 0 ? null : { i, action: 'open', first: true };
+    }
+    const flags = [];
+    let safe = -1, best = -1, risk = Infinity;
+    for (let i = 0; i < s.length; i++) {
+      if (s[i] !== -1 || !board.el[i] || !Number.isFinite(result.p[i])) continue;
+      const p = result.p[i];
+      if (!result.approx[i] && result.certain[i] && p === 1) flags.push(i);
+      else if (!result.approx[i] && result.certain[i] && p === 0) {
+        if (safe < 0) safe = i;
+      } else if (p < risk) { risk = p; best = i; }
+    }
+    if (flags.length) return { action: 'flag-batch', indices: flags };
+    if (safe >= 0) return { i: safe, action: 'open' };
+    if (allowGuess && best >= 0) return { i: best, action: 'open', risk };
+    return null;
+  }
+
+  const api = { solve, chooseAutoMove };
   if (typeof module !== 'undefined' && module.exports) { module.exports = api; return; }
   if (typeof window === 'undefined') return;
   window.MSHelperSolver = api;
@@ -323,15 +347,18 @@
       if (std) total = std;
     }
     const face = document.getElementById('top_area_face');
-    const over = (face && /face-(lose|win)\b/.test(face.className)) || s.some((v) => v === -3);
-    return { W, H, s, total, el, flags, over };
+    const faceState = face && face.className.match(/face-(lose|win)\b/);
+    const outcome = faceState ? faceState[1] : (s.some((v) => v === -3) ? 'lose' : null);
+    const over = outcome != null;
+    return { W, H, s, total, el, flags, over, outcome };
   }
 
   // ---------------------------------------------------------------------------
   // Overlay UI
   // ---------------------------------------------------------------------------
-  const opts = { on: true, pct: true, guess: false };
+  const opts = { on: true, pct: true, guess: true, games: 1 };
   try { Object.assign(opts, JSON.parse(localStorage.getItem('msHelperOpts') || '{}')); } catch (e) { /* ignore */ }
+  opts.games = Number.isSafeInteger(Number(opts.games)) && Number(opts.games) >= 1 && Number(opts.games) <= 999 ? Number(opts.games) : 1;
   const saveOpts = () => { try { localStorage.setItem('msHelperOpts', JSON.stringify(opts)); } catch (e) { /* ignore */ } };
 
   const style = document.createElement('style');
@@ -509,33 +536,6 @@
     autoStatus = 'Running — opening safe cells and flagging certain mines.';
     syncButtons();
     scheduleAuto(0);
-  }
-
-  function chooseAutoMove(board, result) {
-    const { s, W, H } = board;
-    // First click starts the board. This site normally protects the first click.
-    if (!s.some((v) => v >= 0)) {
-      let i = Math.floor(H / 2) * W + Math.floor(W / 2);
-      if (s[i] !== -1) i = s.indexOf(-1);
-      return i < 0 ? null : { i, action: 'open', first: true };
-    }
-    let mine = -1, safe = -1, best = -1, risk = Infinity;
-    for (let i = 0; i < s.length; i++) {
-      if (s[i] !== -1 || !board.el[i] || !Number.isFinite(result.p[i])) continue;
-      const p = result.p[i];
-      // Never treat an approximation as a guaranteed safe square or mine.
-      if (!result.approx[i] && result.certain[i]) {
-        if (p === 1 && mine < 0) mine = i;
-        else if (p === 0 && safe < 0) safe = i;
-      } else if (p < risk) {
-        risk = p;
-        best = i;
-      }
-    }
-    if (mine >= 0) return { i: mine, action: 'flag' };
-    if (safe >= 0) return { i: safe, action: 'open' };
-    if (opts.guess && best >= 0) return { i: best, action: 'open', risk };
-    return null;
   }
 
   function dispatchMove(el, action) {
