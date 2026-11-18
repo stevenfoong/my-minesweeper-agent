@@ -539,7 +539,7 @@
   }
 
   function dispatchMove(el, action) {
-    if (!el || !el.isConnected || !/_closed\\b/.test(el.className)) return false;
+    if (!el || !el.isConnected || !/_closed\b/.test(el.className)) return false;
     const rc = el.getBoundingClientRect();
     const button = action === 'flag' ? 2 : 0;
     const init = {
