@@ -2,7 +2,7 @@
 
 A browser overlay for [minesweeper.online](https://minesweeper.online). It analyses the board while you play. It shows which cells are safe to open, which are certain mines, and the chance of a mine in every other closed cell.
 
-It only reads the page and draws on top of it. It never clicks or plays for you.
+By default it only reads the page and draws on top of it. You can optionally enable **Auto Play** to make moves using the solver.
 
 | Mark on a cell | Meaning |
 |---|---|
@@ -17,7 +17,7 @@ A small panel in the top-right corner of the page shows:
 - how risky the best guess is, when you have to guess
 - warnings, for example when your flags don't match the numbers
 
-The panel has buttons to turn the overlay or the percentages on and off. **Alt+H** also turns the overlay on and off. Your choices are remembered. The overlay hides when the game is over.
+The panel has buttons to turn the overlay or the percentages on and off, plus **Start/Stop Auto Play** and **Guesses: on/off**. **Alt+H** also turns the overlay on and off. Your choices are remembered. The overlay hides when the game is over.
 
 ## Installation
 
@@ -58,6 +58,11 @@ You need to click it again after every page reload.
 1. Start a game and open your first cell. The overlay stays empty until at least one cell is open.
 2. Open the green ✓ cells and flag the red ✖ cells.
 3. When nothing is green, the blue outline marks the lowest-risk cell. It is still a gamble, so check the percentage.
+4. To let the helper play, click **Start Auto Play**. It opens safe cells and flags certain mines, one action at a time. It can open the first cell of a new game automatically.
+5. By default, Auto Play stops when there is no certain move. Turn **Guesses: on** to let it choose the lowest estimated mine-risk cell instead. Guesses can lose the game.
+6. Click **Stop Auto Play** at any time. A manual cell click also stops it. Auto Play stops on game over, board inconsistency, or if the game does not acknowledge a click; it will not automatically restart in a new game.
+
+**Auto Play is opt-in.** Only the guessing preference is remembered; whether Auto Play is running is never persisted. Synthetic mouse events depend on the site's current input handlers, so if the site changes them, Auto Play stops when the move is not accepted.
 
 **Your flags are treated as mines.** If you place a wrong flag, the panel shows an *inconsistent* warning. Remove the flag and the numbers recalculate.
 
@@ -81,7 +86,7 @@ A group that needs more than 2 million search steps falls back to a simple local
 
 ## Fair play
 
-minesweeper.online has ranked games and leaderboards. Using an assistant in ranked games is likely against the site's rules. Use this helper for practice, learning, and unranked or custom games.
+minesweeper.online has ranked games and leaderboards. Using an assistant or automation in ranked games is likely against the site's rules. Use this helper for practice, learning, and unranked or custom games.
 
 ## Troubleshooting
 
@@ -90,6 +95,7 @@ minesweeper.online has ranked games and leaderboards. Using an assistant in rank
 | Nothing appears after installing | Enable **Allow User Scripts** or **Developer mode** for Tampermonkey (see Option 1, step 2), then refresh the page |
 | The panel shows but the board has no marks | Open at least one cell. Also check that the overlay is on (**Alt+H**) |
 | "Inconsistent — check your flags" | One of your flags is wrong. Remove flags near the cell the warning names |
+| Auto Play stops because a click was not accepted | The site may no longer accept programmatically dispatched mouse events. Use the overlay manually until the click adapter is updated |
 | The site changed its layout and the helper stopped working | The cell class names may have changed. Open an issue with a screenshot |
 
 ## Files

@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Minesweeper Online Helper Overlay
 // @namespace    local.minesweeper-helper
-// @version      1.0.0
-// @description  Shows safe cells, certain mines and mine probabilities on minesweeper.online
+// @version      1.1.0
+// @description  Shows mine probabilities and offers opt-in automatic play on minesweeper.online
 // @match        https://minesweeper.online/*
 // @grant        none
 // @run-at       document-idle
@@ -118,9 +118,11 @@
     }
 
     const comps = [];
+    let hasIncompleteComponent = false;
     for (const ccons of compMap.values()) {
       const res = enumerate(ccons);
       if (res.aborted) {
+        hasIncompleteComponent = true;
         // Too large to enumerate: local approximation.
         for (const c of ccons) for (const j of c.cells) {
           const est = c.need / c.cells.length;
@@ -146,7 +148,8 @@
     for (const c of comps) total = conv(total, c.Wn);
 
     // weight(m) for m frontier mines
-    let useGlobal = M != null;
+    // An unfinished component has an unknown mine count: global odds cannot be exact.
+    let useGlobal = M != null && !hasIncompleteComponent;
     let wLog = null, wMax = -Infinity;
     if (useGlobal) {
       wLog = new Float64Array(total.length);
@@ -193,7 +196,8 @@
       } else ip = NaN;
       for (const i of interior) {
         p[i] = ip;
-        if (ip === 0 || ip === 1) certain[i] = 1;
+        if (!useGlobal) approx[i] = 1;
+        if (useGlobal && (ip === 0 || ip === 1)) certain[i] = 1;
       }
     }
 
@@ -326,7 +330,7 @@
   // ---------------------------------------------------------------------------
   // Overlay UI
   // ---------------------------------------------------------------------------
-  const opts = { on: true, pct: true };
+  const opts = { on: true, pct: true, guess: false };
   try { Object.assign(opts, JSON.parse(localStorage.getItem('msHelperOpts') || '{}')); } catch (e) { /* ignore */ }
   const saveOpts = () => { try { localStorage.setItem('msHelperOpts', JSON.stringify(opts)); } catch (e) { /* ignore */ } };
 
@@ -345,6 +349,7 @@
   #msh-panel button{background:#333;color:#ddd;border:1px solid #555;border-radius:3px;padding:2px 6px;margin:4px 4px 0 0;cursor:pointer;font-size:11px}
   #msh-panel button.on{background:#2a6f3f;color:#fff}
   #msh-panel .warn{color:#ffb347;max-width:220px}
+  #msh-panel .auto-state{margin-top:5px;max-width:220px;opacity:.85}
   #msh-panel .legend span{display:inline-block;width:10px;height:10px;margin:0 3px 0 6px;vertical-align:-1px;border-radius:2px}
   `;
   document.head.appendChild(style);
@@ -359,17 +364,30 @@
     <div id="msh-stats">waiting for board…</div>
     <div class="legend"><span style="background:rgba(40,200,90,.8)"></span>safe<span style="background:rgba(230,40,40,.8)"></span>mine<span style="background:none;outline:2px solid #29d3ff"></span>best guess</div>
     <div class="warn" id="msh-warn"></div>
-    <button id="msh-on"></button><button id="msh-pct"></button>`;
+    <button id="msh-on"></button><button id="msh-pct"></button><br>
+    <button id="msh-auto"></button><button id="msh-guess"></button>
+    <div class="auto-state" id="msh-auto-state">Auto Play is off.</div>`;
   document.body.appendChild(panel);
   const $ = (id) => panel.querySelector('#' + id);
+  const AUTO_DELAY = 450;
+  const ACTION_TIMEOUT = 2200;
+  let autoOn = false, autoTimer = null, autoPending = null, autoOpened = null;
+  let autoStatus = 'Auto Play is off.';
   const syncButtons = () => {
     $('msh-on').textContent = opts.on ? 'Overlay: on' : 'Overlay: off';
     $('msh-on').className = opts.on ? 'on' : '';
     $('msh-pct').textContent = opts.pct ? '%: on' : '%: off';
     $('msh-pct').className = opts.pct ? 'on' : '';
+    $('msh-auto').textContent = autoOn ? 'Stop Auto Play' : 'Start Auto Play';
+    $('msh-auto').className = autoOn ? 'on' : '';
+    $('msh-guess').textContent = opts.guess ? 'Guesses: on' : 'Guesses: off';
+    $('msh-guess').className = opts.guess ? 'on' : '';
+    $('msh-auto-state').textContent = autoStatus;
   };
   $('msh-on').onclick = () => { opts.on = !opts.on; saveOpts(); syncButtons(); render(true); };
   $('msh-pct').onclick = () => { opts.pct = !opts.pct; saveOpts(); syncButtons(); render(true); };
+  $('msh-guess').onclick = () => { opts.guess = !opts.guess; saveOpts(); syncButtons(); };
+  $('msh-auto').onclick = () => { if (autoOn) stopAuto('Stopped by user.'); else startAuto(); };
   syncButtons();
 
   function color(p) {
@@ -382,7 +400,11 @@
 
   function render(force) {
     const board = readBoard();
-    if (!board) { layer.innerHTML = ''; $('msh-stats').textContent = 'no board on this page'; return; }
+    if (!board) {
+      if (autoOn) stopAuto('No board found — Auto Play stopped.');
+      lastBoard = null; lastResult = null; lastSig = '';
+      layer.innerHTML = ''; $('msh-stats').textContent = 'no board on this page'; return;
+    }
     const sig = board.W + 'x' + board.H + ':' + board.total + ':' + board.over + ':' + Array.from(board.s).join(',');
     if (sig !== lastSig) {
       lastSig = sig;
@@ -398,7 +420,10 @@
 
   function draw(board, r) {
     layer.innerHTML = '';
-    if (board.over) { $('msh-stats').textContent = 'Game over — start a new game.'; $('msh-warn').textContent = ''; return; }
+    if (board.over) {
+      if (autoOn) stopAuto('Game over — Auto Play stopped.');
+      $('msh-stats').textContent = 'Game over — start a new game.'; $('msh-warn').textContent = ''; return;
+    }
     if (!r) return;
     const { W, H, s } = board;
     let safe = 0, mines = 0, best = Infinity, unknown = 0, opened = 0;
@@ -452,6 +477,145 @@
     }
   }
 
+
+  // ---------------------------------------------------------------------------
+  // Opt-in Auto Play. One action at a time; wait for the board to acknowledge it.
+  // Never resume automatically after a page reload or a new game.
+  // ---------------------------------------------------------------------------
+  function stopAuto(message) {
+    if (autoTimer != null) clearTimeout(autoTimer);
+    autoTimer = null;
+    autoOn = false;
+    autoPending = null;
+    autoOpened = null;
+    autoStatus = message;
+    syncButtons();
+  }
+
+  function scheduleAuto(delay) {
+    if (!autoOn || autoTimer != null) return;
+    autoTimer = setTimeout(() => { autoTimer = null; autoStep(); }, delay);
+  }
+
+  function startAuto() {
+    render(false);
+    if (!lastBoard || lastBoard.over) {
+      stopAuto('Start a new game before enabling Auto Play.');
+      return;
+    }
+    autoOn = true;
+    autoPending = null;
+    autoOpened = Array.from(lastBoard.s).filter((v) => v >= 0).length;
+    autoStatus = 'Running — opening safe cells and flagging certain mines.';
+    syncButtons();
+    scheduleAuto(0);
+  }
+
+  function chooseAutoMove(board, result) {
+    const { s, W, H } = board;
+    // First click starts the board. This site normally protects the first click.
+    if (!s.some((v) => v >= 0)) {
+      let i = Math.floor(H / 2) * W + Math.floor(W / 2);
+      if (s[i] !== -1) i = s.indexOf(-1);
+      return i < 0 ? null : { i, action: 'open', first: true };
+    }
+    let mine = -1, safe = -1, best = -1, risk = Infinity;
+    for (let i = 0; i < s.length; i++) {
+      if (s[i] !== -1 || !board.el[i] || !Number.isFinite(result.p[i])) continue;
+      const p = result.p[i];
+      // Never treat an approximation as a guaranteed safe square or mine.
+      if (!result.approx[i] && result.certain[i]) {
+        if (p === 1 && mine < 0) mine = i;
+        else if (p === 0 && safe < 0) safe = i;
+      } else if (p < risk) {
+        risk = p;
+        best = i;
+      }
+    }
+    if (mine >= 0) return { i: mine, action: 'flag' };
+    if (safe >= 0) return { i: safe, action: 'open' };
+    if (opts.guess && best >= 0) return { i: best, action: 'open', risk };
+    return null;
+  }
+
+  function dispatchMove(el, action) {
+    if (!el || !el.isConnected || !/_closed\b/.test(el.className)) return false;
+    const rc = el.getBoundingClientRect();
+    const button = action === 'flag' ? 2 : 0;
+    const init = {
+      bubbles: true, cancelable: true, view: window, button,
+      clientX: rc.left + rc.width / 2, clientY: rc.top + rc.height / 2,
+    };
+    for (const type of ['mousedown', 'mouseup']) {
+      const ev = new MouseEvent(type, { ...init, buttons: type === 'mousedown' ? (button === 2 ? 2 : 1) : 0 });
+      // Some versions of the site inspect the legacy event.which property.
+      Object.defineProperty(ev, 'which', { value: button === 2 ? 3 : 1 });
+      el.dispatchEvent(ev);
+    }
+    if (button === 2) {
+      const ev = new MouseEvent('contextmenu', { ...init, buttons: 0 });
+      Object.defineProperty(ev, 'which', { value: 3 });
+      el.dispatchEvent(ev);
+    }
+    return true;
+  }
+
+  function autoStep() {
+    if (!autoOn) return;
+    render(false); // Refresh the board before deciding on the next move.
+    if (!autoOn) return; // Game-over detection may have stopped Auto Play.
+    const board = lastBoard, result = lastResult;
+    if (!board || !result) { stopAuto('Unable to read or solve the board.'); return; }
+    const opened = Array.from(board.s).filter((v) => v >= 0).length;
+    if (opened < autoOpened) { stopAuto('New game detected — Auto Play stopped.'); return; }
+    autoOpened = opened;
+
+    if (autoPending) {
+      const { i, action, at } = autoPending;
+      const current = board.s[i];
+      const acknowledged = action === 'flag' ? current === -2 : current !== -1;
+      if (acknowledged) {
+        autoPending = null;
+        scheduleAuto(AUTO_DELAY);
+      } else if (Date.now() - at > ACTION_TIMEOUT) {
+        stopAuto('The game did not accept the last click — Auto Play stopped.');
+      } else {
+        scheduleAuto(175);
+      }
+      return;
+    }
+    if (result.warnings.length) {
+      stopAuto('Inconsistent board or flags — Auto Play stopped.');
+      return;
+    }
+    const move = chooseAutoMove(board, result);
+    if (!move) {
+      stopAuto(opts.guess
+        ? 'No playable move found — Auto Play stopped.'
+        : 'No certain move left. Enable guesses and press Start to continue.');
+      return;
+    }
+    const target = board.el[move.i];
+    if (!dispatchMove(target, move.action)) {
+      stopAuto('Cell not available — Auto Play stopped.');
+      return;
+    }
+    autoPending = { i: move.i, action: move.action, at: Date.now() };
+    autoStatus = move.first ? 'Opening the first cell…'
+      : move.risk != null ? 'Guessing with ' + (100 * move.risk).toFixed(1) + '% mine risk…'
+      : move.action === 'flag' ? 'Flagging a certain mine…' : 'Opening a safe cell…';
+    syncButtons();
+    scheduleAuto(175);
+  }
+
+  // A real manual move cancels the agent rather than racing the user's input.
+  const onManualMove = (e) => {
+    if (autoOn && e.isTrusted && e.target.closest && e.target.closest('div.cell[id^="cell_"]')) {
+      stopAuto('Manual move detected — Auto Play stopped.');
+    }
+  };
+  document.addEventListener('mousedown', onManualMove, true);
+
   // Poll: cheap, survives the site swapping out the board on new games.
   const timer = setInterval(() => render(false), 250);
   window.addEventListener('resize', position);
@@ -463,7 +627,9 @@
   window.__msHelper = {
     toggle() { opts.on = !opts.on; saveOpts(); syncButtons(); render(true); },
     remove() {
+      if (autoOn) stopAuto('Stopped.');
       clearInterval(timer);
+      document.removeEventListener('mousedown', onManualMove, true);
       window.removeEventListener('resize', position);
       window.removeEventListener('scroll', position, true);
       document.removeEventListener('keydown', onKey);
