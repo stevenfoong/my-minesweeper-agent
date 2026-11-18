@@ -638,6 +638,10 @@
 
   function awaitPending(board, result) {
     const pending = autoRun.pending, now = Date.now();
+    if (now - pending.sentAt > RESPONSE_TIMEOUT_MS) {
+      stopAuto('Timed out waiting for the tile response and solver to settle.');
+      return;
+    }
     const acknowledged = pending.action === 'flag-batch'
       ? pending.indices.every((i) => board.s[i] === -2)
       : board.s[pending.i] >= 0 || board.s[pending.i] === -3;
