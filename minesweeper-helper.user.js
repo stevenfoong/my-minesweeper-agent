@@ -525,36 +525,93 @@
 
 
   // ---------------------------------------------------------------------------
-  // Opt-in Auto Play. One action at a time; wait for the board to acknowledge it.
-  // Never resume automatically after a page reload or a new game.
-  // ---------------------------------------------------------------------------
+  // Opt-in game runner: wait for an acknowledged, settled board and a fresh
+  // synchronous solve() before allowing another reveal. Certain mine flags
+  // are the one exception and may be dispatched together.
   function stopAuto(message) {
     if (autoTimer != null) clearTimeout(autoTimer);
     autoTimer = null;
-    autoOn = false;
-    autoPending = null;
-    autoOpened = null;
-    autoStatus = message;
+    const summary = autoRun ? ' (' + autoRun.completed + '/' + autoRun.target
+      + ' games; ' + autoRun.wins + ' won, ' + autoRun.losses + ' lost)' : '';
+    autoRun = null;
+    autoStatus = message + summary;
     syncButtons();
   }
 
   function scheduleAuto(delay) {
-    if (!autoOn || autoTimer != null) return;
+    if (!autoRun || autoTimer != null) return;
     autoTimer = setTimeout(() => { autoTimer = null; autoStep(); }, delay);
   }
 
+  function openedCount(board) {
+    let count = 0;
+    for (const v of board.s) if (v >= 0) count++;
+    return count;
+  }
+
+  function updateRunStatus(message) {
+    if (!autoRun) return;
+    autoStatus = 'Game ' + (autoRun.completed + 1) + '/' + autoRun.target + ' · '
+      + autoRun.wins + 'W/' + autoRun.losses + 'L · ' + message;
+    syncButtons();
+  }
+
   function startAuto() {
-    render(false);
-    if (!lastBoard || lastBoard.over) {
-      stopAuto('Start a new game before enabling Auto Play.');
+    if (autoRun) return;
+    const count = Number($('msh-games').value);
+    if (!Number.isSafeInteger(count) || count < 1 || count > 999) {
+      autoStatus = 'Enter a game count from 1 to 999.';
+      syncButtons();
       return;
     }
-    autoOn = true;
-    autoPending = null;
-    autoOpened = Array.from(lastBoard.s).filter((v) => v >= 0).length;
-    autoStatus = 'Running — opening safe cells and flagging certain mines.';
-    syncButtons();
-    scheduleAuto(0);
+    opts.games = count; saveOpts();
+    render(false);
+    if (!lastBoard) {
+      autoStatus = 'Open a Minesweeper board first.';
+      syncButtons();
+      return;
+    }
+    autoRun = {
+      target: count, completed: 0, wins: 0, losses: 0, phase: 'playing',
+      pending: null, opened: openedCount(lastBoard), restartAt: 0,
+    };
+    if (lastBoard.over) restartGame();
+    else {
+      updateRunStatus('Playing.');
+      scheduleAuto(0);
+    }
+  }
+
+  function restartGame() {
+    if (!autoRun) return;
+    const face = document.getElementById('top_area_face');
+    if (!face || !face.isConnected) {
+      stopAuto('New-game button was not found.');
+      return;
+    }
+    autoRun.phase = 'restarting';
+    autoRun.pending = null;
+    autoRun.restartAt = Date.now();
+    updateRunStatus('Requesting a new board…');
+    face.click();
+    scheduleAuto(POLL_MS);
+  }
+
+  function finishGame(board) {
+    if (!autoRun) return;
+    autoRun.completed++;
+    if (board.outcome === 'win') autoRun.wins++;
+    else if (board.outcome === 'lose') autoRun.losses++;
+    if (autoRun.completed >= autoRun.target) {
+      stopAuto('Finished all requested games.');
+      return;
+    }
+    const wait = 3000 + Math.floor(Math.random() * 7001);
+    autoRun.phase = 'cooldown';
+    autoRun.pending = null;
+    updateRunStatus('Game ended (' + (board.outcome || 'unknown') +
+      '). Starting next game in ' + (wait / 1000).toFixed(1) + 's.');
+    scheduleAuto(wait);
   }
 
   function dispatchMove(el, action) {
@@ -579,57 +636,107 @@
     return true;
   }
 
-  function autoStep() {
-    if (!autoOn) return;
-    render(false); // Refresh the board before deciding on the next move.
-    if (!autoOn) return; // Game-over detection may have stopped Auto Play.
-    const board = lastBoard, result = lastResult;
-    if (!board || !result) { stopAuto('Unable to read or solve the board.'); return; }
-    const opened = Array.from(board.s).filter((v) => v >= 0).length;
-    if (opened < autoOpened) { stopAuto('New game detected — Auto Play stopped.'); return; }
-    autoOpened = opened;
+  function awaitPending(board, result) {
+    const pending = autoRun.pending, now = Date.now();
+    const acknowledged = pending.action === 'flag-batch'
+      ? pending.indices.every((i) => board.s[i] === -2)
+      : board.s[pending.i] >= 0 || board.s[pending.i] === -3;
 
-    if (autoPending) {
-      const { i, action, at } = autoPending;
-      const current = board.s[i];
-      const acknowledged = action === 'flag' ? current === -2 : current !== -1;
-      if (acknowledged) {
-        autoPending = null;
-        scheduleAuto(AUTO_DELAY);
-      } else if (Date.now() - at > ACTION_TIMEOUT) {
-        stopAuto('The game did not accept the last click — Auto Play stopped.');
-      } else {
-        scheduleAuto(175);
+    if (!acknowledged) {
+      if (now - pending.sentAt > RESPONSE_TIMEOUT_MS)
+        stopAuto('Timed out waiting for the last move to appear on the board.');
+      else {
+        updateRunStatus('Waiting for the board to acknowledge the last move…');
+        scheduleAuto(POLL_MS);
       }
       return;
     }
+    if (!pending.ackAt || pending.signature !== lastSig) {
+      pending.ackAt = now;
+      pending.signature = lastSig;
+    }
+    if (!result) {
+      stopAuto('The board could not be recalculated after the last move.');
+      return;
+    }
+    const settle = pending.action === 'flag-batch' ? FLAG_SETTLE_MS : REVEAL_SETTLE_MS;
+    if (now - pending.ackAt < settle) {
+      updateRunStatus('Board updated; waiting for the reveal and solver to settle…');
+      scheduleAuto(POLL_MS);
+      return;
+    }
+    autoRun.pending = null;
+    scheduleAuto(0);
+  }
+
+  function autoStep() {
+    if (!autoRun) return;
+    render(false);
+    if (!autoRun) return;
+    const board = lastBoard, phase = autoRun.phase;
+    if (phase === 'cooldown') { restartGame(); return; }
+
+    if (phase === 'restarting') {
+      const fresh = board && !board.over && openedCount(board) === 0
+        && Array.from(board.s).every((v) => v === -1);
+      if (fresh) {
+        autoRun.phase = 'playing';
+        autoRun.opened = 0;
+        updateRunStatus('New board ready.');
+        scheduleAuto(0);
+      } else if (Date.now() - autoRun.restartAt > RESTART_TIMEOUT_MS)
+        stopAuto('New board was not confirmed after the reset click.');
+      else scheduleAuto(POLL_MS);
+      return;
+    }
+    if (!board) { stopAuto('Board disappeared during play.'); return; }
+    if (board.over) { finishGame(board); return; }
+
+    const opened = openedCount(board);
+    if (opened < autoRun.opened) {
+      stopAuto('Board reset externally — Auto Play stopped.');
+      return;
+    }
+    autoRun.opened = opened;
+
+    const result = lastResult;
+    if (autoRun.pending) { awaitPending(board, result); return; }
+    if (!result) { stopAuto('Unable to solve the current board.'); return; }
     if (result.warnings.length) {
       stopAuto('Inconsistent board or flags — Auto Play stopped.');
       return;
     }
-    const move = chooseAutoMove(board, result);
+    const move = chooseAutoMove(board, result, opts.guess);
     if (!move) {
-      stopAuto(opts.guess
-        ? 'No playable move found — Auto Play stopped.'
-        : 'No certain move left. Enable guesses and press Start to continue.');
+      stopAuto(opts.guess ? 'No playable move found.'
+        : 'No certain move left. Enable guesses to continue.');
       return;
     }
-    const target = board.el[move.i];
-    if (!dispatchMove(target, move.action)) {
-      stopAuto('Cell not available — Auto Play stopped.');
-      return;
+    if (move.action === 'flag-batch') {
+      for (const i of move.indices) {
+        if (!dispatchMove(board.el[i], 'flag')) {
+          stopAuto('Unable to mark a certain mine.'); return;
+        }
+      }
+      autoRun.pending = { action: 'flag-batch', indices: move.indices,
+        sentAt: Date.now(), ackAt: 0, signature: '' };
+      updateRunStatus('Marking ' + move.indices.length + ' certain mine(s)…');
+    } else {
+      if (!dispatchMove(board.el[move.i], 'open')) {
+        stopAuto('Cell not available — Auto Play stopped.'); return;
+      }
+      autoRun.pending = { action: 'open', i: move.i, sentAt: Date.now(),
+        ackAt: 0, signature: '' };
+      updateRunStatus(move.first ? 'Waiting for first tile to reveal…'
+        : move.risk != null ? 'Guessing at ' + (move.risk * 100).toFixed(1)
+          + '% risk; waiting for reveal…' : 'Waiting for safe tile to reveal…');
     }
-    autoPending = { i: move.i, action: move.action, at: Date.now() };
-    autoStatus = move.first ? 'Opening the first cell…'
-      : move.risk != null ? 'Guessing with ' + (100 * move.risk).toFixed(1) + '% mine risk…'
-      : move.action === 'flag' ? 'Flagging a certain mine…' : 'Opening a safe cell…';
-    syncButtons();
-    scheduleAuto(175);
+    scheduleAuto(POLL_MS);
   }
 
-  // A real manual move cancels the agent rather than racing the user's input.
   const onManualMove = (e) => {
-    if (autoOn && e.isTrusted && e.target.closest && e.target.closest('div.cell[id^="cell_"]')) {
+    if (autoRun && e.isTrusted && e.target.closest &&
+        e.target.closest('div.cell[id^="cell_"], #top_area_face')) {
       stopAuto('Manual move detected — Auto Play stopped.');
     }
   };
@@ -639,14 +746,18 @@
   const timer = setInterval(() => render(false), 250);
   window.addEventListener('resize', position);
   window.addEventListener('scroll', position, true);
-  const onKey = (e) => { if (e.altKey && (e.key === 'h' || e.key === 'H')) { opts.on = !opts.on; saveOpts(); syncButtons(); render(true); } };
+  const onKey = (e) => {
+    if (e.altKey && (e.key === 'h' || e.key === 'H')) { opts.on = !opts.on; saveOpts(); syncButtons(); render(true); }
+    else if (autoRun && e.isTrusted && (e.key === ' ' || e.key === 'F2') &&
+             !/^(INPUT|TEXTAREA)$/.test(e.target.tagName)) stopAuto('Manual new-game shortcut detected.');
+  };
   document.addEventListener('keydown', onKey);
   render(true);
 
   window.__msHelper = {
     toggle() { opts.on = !opts.on; saveOpts(); syncButtons(); render(true); },
     remove() {
-      if (autoOn) stopAuto('Stopped.');
+      if (autoRun) stopAuto('Stopped.');
       clearInterval(timer);
       document.removeEventListener('mousedown', onManualMove, true);
       window.removeEventListener('resize', position);
