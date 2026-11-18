@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Minesweeper Online Helper Overlay
 // @namespace    local.minesweeper-helper
-// @version      1.1.0
+// @version      1.2.0
 // @description  Shows mine probabilities and offers opt-in automatic play on minesweeper.online
 // @match        https://minesweeper.online/*
 // @grant        none
@@ -267,7 +267,31 @@
     return { cells: order, Wn, P };
   }
 
-  const api = { solve };
+  // Select known mines first, then certain-safe tiles, then the lowest risk.
+  function chooseAutoMove(board, result, allowGuess = true) {
+    const { s, W, H } = board;
+    if (!s.some((v) => v >= 0)) {
+      let i = Math.floor(H / 2) * W + Math.floor(W / 2);
+      if (s[i] !== -1) i = s.indexOf(-1);
+      return i < 0 ? null : { i, action: 'open', first: true };
+    }
+    const flags = [];
+    let safe = -1, best = -1, risk = Infinity;
+    for (let i = 0; i < s.length; i++) {
+      if (s[i] !== -1 || !board.el[i] || !Number.isFinite(result.p[i])) continue;
+      const p = result.p[i];
+      if (!result.approx[i] && result.certain[i] && p === 1) flags.push(i);
+      else if (!result.approx[i] && result.certain[i] && p === 0) {
+        if (safe < 0) safe = i;
+      } else if (p < risk) { risk = p; best = i; }
+    }
+    if (flags.length) return { action: 'flag-batch', indices: flags };
+    if (safe >= 0) return { i: safe, action: 'open' };
+    if (allowGuess && best >= 0) return { i: best, action: 'open', risk };
+    return null;
+  }
+
+  const api = { solve, chooseAutoMove };
   if (typeof module !== 'undefined' && module.exports) { module.exports = api; return; }
   if (typeof window === 'undefined') return;
   window.MSHelperSolver = api;
@@ -323,15 +347,18 @@
       if (std) total = std;
     }
     const face = document.getElementById('top_area_face');
-    const over = (face && /face-(lose|win)\b/.test(face.className)) || s.some((v) => v === -3);
-    return { W, H, s, total, el, flags, over };
+    const faceState = face && face.className.match(/face-(lose|win)\b/);
+    const outcome = faceState ? faceState[1] : (s.some((v) => v === -3) ? 'lose' : null);
+    const over = outcome != null;
+    return { W, H, s, total, el, flags, over, outcome };
   }
 
   // ---------------------------------------------------------------------------
   // Overlay UI
   // ---------------------------------------------------------------------------
-  const opts = { on: true, pct: true, guess: false };
+  const opts = { on: true, pct: true, guess: true, games: 1 };
   try { Object.assign(opts, JSON.parse(localStorage.getItem('msHelperOpts') || '{}')); } catch (e) { /* ignore */ }
+  opts.games = Number.isSafeInteger(Number(opts.games)) && Number(opts.games) >= 1 && Number(opts.games) <= 999 ? Number(opts.games) : 1;
   const saveOpts = () => { try { localStorage.setItem('msHelperOpts', JSON.stringify(opts)); } catch (e) { /* ignore */ } };
 
   const style = document.createElement('style');
@@ -349,7 +376,10 @@
   #msh-panel button{background:#333;color:#ddd;border:1px solid #555;border-radius:3px;padding:2px 6px;margin:4px 4px 0 0;cursor:pointer;font-size:11px}
   #msh-panel button.on{background:#2a6f3f;color:#fff}
   #msh-panel .warn{color:#ffb347;max-width:220px}
-  #msh-panel .auto-state{margin-top:5px;max-width:220px;opacity:.85}
+  #msh-panel .auto-state{margin-top:5px;max-width:230px;opacity:.85}
+  #msh-panel .game-limit{display:flex;align-items:center;gap:6px;margin-top:6px}
+  #msh-panel input[type=number]{width:60px;padding:2px 4px;border:1px solid #666;border-radius:3px;background:#12191e;color:#fff}
+  #msh-panel button:disabled{opacity:.45;cursor:not-allowed}
   #msh-panel .legend span{display:inline-block;width:10px;height:10px;margin:0 3px 0 6px;vertical-align:-1px;border-radius:2px}
   `;
   document.head.appendChild(style);
@@ -365,29 +395,45 @@
     <div class="legend"><span style="background:rgba(40,200,90,.8)"></span>safe<span style="background:rgba(230,40,40,.8)"></span>mine<span style="background:none;outline:2px solid #29d3ff"></span>best guess</div>
     <div class="warn" id="msh-warn"></div>
     <button id="msh-on"></button><button id="msh-pct"></button><br>
-    <button id="msh-auto"></button><button id="msh-guess"></button>
+    <label class="game-limit" for="msh-games">Games to play: <input id="msh-games" type="number" min="1" max="999" step="1" value="1"></label>
+    <button id="msh-start">Start Auto Play</button><button id="msh-stop">Stop</button><button id="msh-guess"></button>
     <div class="auto-state" id="msh-auto-state">Auto Play is off.</div>`;
   document.body.appendChild(panel);
   const $ = (id) => panel.querySelector('#' + id);
-  const AUTO_DELAY = 450;
-  const ACTION_TIMEOUT = 2200;
-  let autoOn = false, autoTimer = null, autoPending = null, autoOpened = null;
-  let autoStatus = 'Auto Play is off.';
+  const REVEAL_SETTLE_MS = 450;
+  const FLAG_SETTLE_MS = 200;
+  const RESPONSE_TIMEOUT_MS = 15000;
+  const RESTART_TIMEOUT_MS = 15000;
+  const POLL_MS = 175;
+  let autoRun = null, autoTimer = null, autoStatus = 'Auto Play is off.';
   const syncButtons = () => {
     $('msh-on').textContent = opts.on ? 'Overlay: on' : 'Overlay: off';
     $('msh-on').className = opts.on ? 'on' : '';
     $('msh-pct').textContent = opts.pct ? '%: on' : '%: off';
     $('msh-pct').className = opts.pct ? 'on' : '';
-    $('msh-auto').textContent = autoOn ? 'Stop Auto Play' : 'Start Auto Play';
-    $('msh-auto').className = autoOn ? 'on' : '';
+    $('msh-start').disabled = !!autoRun;
+    $('msh-stop').disabled = !autoRun;
     $('msh-guess').textContent = opts.guess ? 'Guesses: on' : 'Guesses: off';
     $('msh-guess').className = opts.guess ? 'on' : '';
+    $('msh-games').disabled = !!autoRun;
+    if (document.activeElement !== $('msh-games')) $('msh-games').value = opts.games;
     $('msh-auto-state').textContent = autoStatus;
   };
   $('msh-on').onclick = () => { opts.on = !opts.on; saveOpts(); syncButtons(); render(true); };
   $('msh-pct').onclick = () => { opts.pct = !opts.pct; saveOpts(); syncButtons(); render(true); };
   $('msh-guess').onclick = () => { opts.guess = !opts.guess; saveOpts(); syncButtons(); };
-  $('msh-auto').onclick = () => { if (autoOn) stopAuto('Stopped by user.'); else startAuto(); };
+  $('msh-games').onchange = () => {
+    const n = Number($('msh-games').value);
+    if (!Number.isSafeInteger(n) || n < 1 || n > 999) {
+      autoStatus = 'Enter a game count from 1 to 999.';
+    } else {
+      opts.games = n; saveOpts();
+      if (!autoRun) autoStatus = 'Ready for ' + n + ' game(s).';
+    }
+    syncButtons();
+  };
+  $('msh-start').onclick = () => startAuto();
+  $('msh-stop').onclick = () => stopAuto('Stopped by user.');
   syncButtons();
 
   function color(p) {
@@ -401,7 +447,7 @@
   function render(force) {
     const board = readBoard();
     if (!board) {
-      if (autoOn) stopAuto('No board found — Auto Play stopped.');
+      if (autoRun && autoRun.phase !== 'restarting') stopAuto('No board found — Auto Play stopped.');
       lastBoard = null; lastResult = null; lastSig = '';
       layer.innerHTML = ''; $('msh-stats').textContent = 'no board on this page'; return;
     }
@@ -409,7 +455,8 @@
     if (sig !== lastSig) {
       lastSig = sig;
       lastBoard = board;
-      try { lastResult = solve(board); } catch (e) { console.error('[msh]', e); lastResult = null; }
+      if (board.over) lastResult = null;
+      else try { lastResult = solve(board); } catch (e) { console.error('[msh]', e); lastResult = null; }
       force = true;
     } else {
       lastBoard.el = board.el; // elements may be re-created
@@ -421,7 +468,6 @@
   function draw(board, r) {
     layer.innerHTML = '';
     if (board.over) {
-      if (autoOn) stopAuto('Game over — Auto Play stopped.');
       $('msh-stats').textContent = 'Game over — start a new game.'; $('msh-warn').textContent = ''; return;
     }
     if (!r) return;
@@ -479,63 +525,93 @@
 
 
   // ---------------------------------------------------------------------------
-  // Opt-in Auto Play. One action at a time; wait for the board to acknowledge it.
-  // Never resume automatically after a page reload or a new game.
-  // ---------------------------------------------------------------------------
+  // Opt-in game runner: wait for an acknowledged, settled board and a fresh
+  // synchronous solve() before allowing another reveal. Certain mine flags
+  // are the one exception and may be dispatched together.
   function stopAuto(message) {
     if (autoTimer != null) clearTimeout(autoTimer);
     autoTimer = null;
-    autoOn = false;
-    autoPending = null;
-    autoOpened = null;
-    autoStatus = message;
+    const summary = autoRun ? ' (' + autoRun.completed + '/' + autoRun.target
+      + ' games; ' + autoRun.wins + ' won, ' + autoRun.losses + ' lost)' : '';
+    autoRun = null;
+    autoStatus = message + summary;
     syncButtons();
   }
 
   function scheduleAuto(delay) {
-    if (!autoOn || autoTimer != null) return;
+    if (!autoRun || autoTimer != null) return;
     autoTimer = setTimeout(() => { autoTimer = null; autoStep(); }, delay);
   }
 
-  function startAuto() {
-    render(false);
-    if (!lastBoard || lastBoard.over) {
-      stopAuto('Start a new game before enabling Auto Play.');
-      return;
-    }
-    autoOn = true;
-    autoPending = null;
-    autoOpened = Array.from(lastBoard.s).filter((v) => v >= 0).length;
-    autoStatus = 'Running — opening safe cells and flagging certain mines.';
-    syncButtons();
-    scheduleAuto(0);
+  function openedCount(board) {
+    let count = 0;
+    for (const v of board.s) if (v >= 0) count++;
+    return count;
   }
 
-  function chooseAutoMove(board, result) {
-    const { s, W, H } = board;
-    // First click starts the board. This site normally protects the first click.
-    if (!s.some((v) => v >= 0)) {
-      let i = Math.floor(H / 2) * W + Math.floor(W / 2);
-      if (s[i] !== -1) i = s.indexOf(-1);
-      return i < 0 ? null : { i, action: 'open', first: true };
+  function updateRunStatus(message) {
+    if (!autoRun) return;
+    autoStatus = 'Game ' + (autoRun.completed + 1) + '/' + autoRun.target + ' · '
+      + autoRun.wins + 'W/' + autoRun.losses + 'L · ' + message;
+    syncButtons();
+  }
+
+  function startAuto() {
+    if (autoRun) return;
+    const count = Number($('msh-games').value);
+    if (!Number.isSafeInteger(count) || count < 1 || count > 999) {
+      autoStatus = 'Enter a game count from 1 to 999.';
+      syncButtons();
+      return;
     }
-    let mine = -1, safe = -1, best = -1, risk = Infinity;
-    for (let i = 0; i < s.length; i++) {
-      if (s[i] !== -1 || !board.el[i] || !Number.isFinite(result.p[i])) continue;
-      const p = result.p[i];
-      // Never treat an approximation as a guaranteed safe square or mine.
-      if (!result.approx[i] && result.certain[i]) {
-        if (p === 1 && mine < 0) mine = i;
-        else if (p === 0 && safe < 0) safe = i;
-      } else if (p < risk) {
-        risk = p;
-        best = i;
-      }
+    opts.games = count; saveOpts();
+    render(false);
+    if (!lastBoard) {
+      autoStatus = 'Open a Minesweeper board first.';
+      syncButtons();
+      return;
     }
-    if (mine >= 0) return { i: mine, action: 'flag' };
-    if (safe >= 0) return { i: safe, action: 'open' };
-    if (opts.guess && best >= 0) return { i: best, action: 'open', risk };
-    return null;
+    autoRun = {
+      target: count, completed: 0, wins: 0, losses: 0, phase: 'playing',
+      pending: null, opened: openedCount(lastBoard), restartAt: 0,
+    };
+    if (lastBoard.over) restartGame();
+    else {
+      updateRunStatus('Playing.');
+      scheduleAuto(0);
+    }
+  }
+
+  function restartGame() {
+    if (!autoRun) return;
+    const face = document.getElementById('top_area_face');
+    if (!face || !face.isConnected) {
+      stopAuto('New-game button was not found.');
+      return;
+    }
+    autoRun.phase = 'restarting';
+    autoRun.pending = null;
+    autoRun.restartAt = Date.now();
+    updateRunStatus('Requesting a new board…');
+    face.click();
+    scheduleAuto(POLL_MS);
+  }
+
+  function finishGame(board) {
+    if (!autoRun) return;
+    autoRun.completed++;
+    if (board.outcome === 'win') autoRun.wins++;
+    else if (board.outcome === 'lose') autoRun.losses++;
+    if (autoRun.completed >= autoRun.target) {
+      stopAuto('Finished all requested games.');
+      return;
+    }
+    const wait = 3000 + Math.floor(Math.random() * 7001);
+    autoRun.phase = 'cooldown';
+    autoRun.pending = null;
+    updateRunStatus('Game ended (' + (board.outcome || 'unknown') +
+      '). Starting next game in ' + (wait / 1000).toFixed(1) + 's.');
+    scheduleAuto(wait);
   }
 
   function dispatchMove(el, action) {
@@ -560,57 +636,111 @@
     return true;
   }
 
-  function autoStep() {
-    if (!autoOn) return;
-    render(false); // Refresh the board before deciding on the next move.
-    if (!autoOn) return; // Game-over detection may have stopped Auto Play.
-    const board = lastBoard, result = lastResult;
-    if (!board || !result) { stopAuto('Unable to read or solve the board.'); return; }
-    const opened = Array.from(board.s).filter((v) => v >= 0).length;
-    if (opened < autoOpened) { stopAuto('New game detected — Auto Play stopped.'); return; }
-    autoOpened = opened;
+  function awaitPending(board, result) {
+    const pending = autoRun.pending, now = Date.now();
+    if (now - pending.sentAt > RESPONSE_TIMEOUT_MS) {
+      stopAuto('Timed out waiting for the tile response and solver to settle.');
+      return;
+    }
+    const acknowledged = pending.action === 'flag-batch'
+      ? pending.indices.every((i) => board.s[i] === -2)
+      : board.s[pending.i] >= 0 || board.s[pending.i] === -3;
 
-    if (autoPending) {
-      const { i, action, at } = autoPending;
-      const current = board.s[i];
-      const acknowledged = action === 'flag' ? current === -2 : current !== -1;
-      if (acknowledged) {
-        autoPending = null;
-        scheduleAuto(AUTO_DELAY);
-      } else if (Date.now() - at > ACTION_TIMEOUT) {
-        stopAuto('The game did not accept the last click — Auto Play stopped.');
-      } else {
-        scheduleAuto(175);
+    if (!acknowledged) {
+      if (now - pending.sentAt > RESPONSE_TIMEOUT_MS)
+        stopAuto('Timed out waiting for the last move to appear on the board.');
+      else {
+        updateRunStatus('Waiting for the board to acknowledge the last move…');
+        scheduleAuto(POLL_MS);
       }
       return;
     }
+    if (!pending.ackAt || pending.signature !== lastSig) {
+      pending.ackAt = now;
+      pending.signature = lastSig;
+    }
+    if (!result) {
+      stopAuto('The board could not be recalculated after the last move.');
+      return;
+    }
+    const settle = pending.action === 'flag-batch' ? FLAG_SETTLE_MS : REVEAL_SETTLE_MS;
+    if (now - pending.ackAt < settle) {
+      updateRunStatus('Board updated; waiting for the reveal and solver to settle…');
+      scheduleAuto(POLL_MS);
+      return;
+    }
+    autoRun.pending = null;
+    scheduleAuto(0);
+  }
+
+  function autoStep() {
+    if (!autoRun) return;
+    render(false);
+    if (!autoRun) return;
+    const board = lastBoard, phase = autoRun.phase;
+    if (phase === 'cooldown') { restartGame(); return; }
+
+    if (phase === 'restarting') {
+      const fresh = board && !board.over && openedCount(board) === 0
+        && Array.from(board.s).every((v) => v === -1);
+      if (fresh) {
+        autoRun.phase = 'playing';
+        autoRun.opened = 0;
+        updateRunStatus('New board ready.');
+        scheduleAuto(0);
+      } else if (Date.now() - autoRun.restartAt > RESTART_TIMEOUT_MS)
+        stopAuto('New board was not confirmed after the reset click.');
+      else scheduleAuto(POLL_MS);
+      return;
+    }
+    if (!board) { stopAuto('Board disappeared during play.'); return; }
+    if (board.over) { finishGame(board); return; }
+
+    const opened = openedCount(board);
+    if (opened < autoRun.opened) {
+      stopAuto('Board reset externally — Auto Play stopped.');
+      return;
+    }
+    autoRun.opened = opened;
+
+    const result = lastResult;
+    if (autoRun.pending) { awaitPending(board, result); return; }
+    if (!result) { stopAuto('Unable to solve the current board.'); return; }
     if (result.warnings.length) {
       stopAuto('Inconsistent board or flags — Auto Play stopped.');
       return;
     }
-    const move = chooseAutoMove(board, result);
+    const move = chooseAutoMove(board, result, opts.guess);
     if (!move) {
-      stopAuto(opts.guess
-        ? 'No playable move found — Auto Play stopped.'
-        : 'No certain move left. Enable guesses and press Start to continue.');
+      stopAuto(opts.guess ? 'No playable move found.'
+        : 'No certain move left. Enable guesses to continue.');
       return;
     }
-    const target = board.el[move.i];
-    if (!dispatchMove(target, move.action)) {
-      stopAuto('Cell not available — Auto Play stopped.');
-      return;
+    if (move.action === 'flag-batch') {
+      for (const i of move.indices) {
+        if (!dispatchMove(board.el[i], 'flag')) {
+          stopAuto('Unable to mark a certain mine.'); return;
+        }
+      }
+      autoRun.pending = { action: 'flag-batch', indices: move.indices,
+        sentAt: Date.now(), ackAt: 0, signature: '' };
+      updateRunStatus('Marking ' + move.indices.length + ' certain mine(s)…');
+    } else {
+      if (!dispatchMove(board.el[move.i], 'open')) {
+        stopAuto('Cell not available — Auto Play stopped.'); return;
+      }
+      autoRun.pending = { action: 'open', i: move.i, sentAt: Date.now(),
+        ackAt: 0, signature: '' };
+      updateRunStatus(move.first ? 'Waiting for first tile to reveal…'
+        : move.risk != null ? 'Guessing at ' + (move.risk * 100).toFixed(1)
+          + '% risk; waiting for reveal…' : 'Waiting for safe tile to reveal…');
     }
-    autoPending = { i: move.i, action: move.action, at: Date.now() };
-    autoStatus = move.first ? 'Opening the first cell…'
-      : move.risk != null ? 'Guessing with ' + (100 * move.risk).toFixed(1) + '% mine risk…'
-      : move.action === 'flag' ? 'Flagging a certain mine…' : 'Opening a safe cell…';
-    syncButtons();
-    scheduleAuto(175);
+    scheduleAuto(POLL_MS);
   }
 
-  // A real manual move cancels the agent rather than racing the user's input.
   const onManualMove = (e) => {
-    if (autoOn && e.isTrusted && e.target.closest && e.target.closest('div.cell[id^="cell_"]')) {
+    if (autoRun && e.isTrusted && e.target.closest &&
+        e.target.closest('div.cell[id^="cell_"], #top_area_face')) {
       stopAuto('Manual move detected — Auto Play stopped.');
     }
   };
@@ -620,14 +750,18 @@
   const timer = setInterval(() => render(false), 250);
   window.addEventListener('resize', position);
   window.addEventListener('scroll', position, true);
-  const onKey = (e) => { if (e.altKey && (e.key === 'h' || e.key === 'H')) { opts.on = !opts.on; saveOpts(); syncButtons(); render(true); } };
+  const onKey = (e) => {
+    if (e.altKey && (e.key === 'h' || e.key === 'H')) { opts.on = !opts.on; saveOpts(); syncButtons(); render(true); }
+    else if (autoRun && e.isTrusted && (e.key === ' ' || e.key === 'F2') &&
+             !/^(INPUT|TEXTAREA)$/.test(e.target.tagName)) stopAuto('Manual new-game shortcut detected.');
+  };
   document.addEventListener('keydown', onKey);
   render(true);
 
   window.__msHelper = {
     toggle() { opts.on = !opts.on; saveOpts(); syncButtons(); render(true); },
     remove() {
-      if (autoOn) stopAuto('Stopped.');
+      if (autoRun) stopAuto('Stopped.');
       clearInterval(timer);
       document.removeEventListener('mousedown', onManualMove, true);
       window.removeEventListener('resize', position);
